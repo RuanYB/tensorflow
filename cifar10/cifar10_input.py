@@ -21,22 +21,18 @@ NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
 
 def read_cifar10(filename_queue):
 	"""从cifar10数据文件中读取和解析样本
-	Reads and parses examples from CIFAR10 data files.
-	Recommendation: if you want N-way read parallelism, call this function
-	N times.  This will give you N independent Readers reading different
-	files & positions within those files, which will give better mixing of
-	examples.
-	Args:
-	filename_queue: A queue of strings with the filenames to read from.
-	Returns:
-	An object representing a single example, with the following fields:
-	  height: number of rows in the result (32)
-	  width: number of columns in the result (32)
-	  depth: number of color channels in the result (3)
-	  key: a scalar string Tensor describing the filename & record number
-	    for this example.
-	  label: an int32 Tensor with the label in the range 0..9.
-	  uint8image: a [height, width, depth] uint8 Tensor with the image data
+	建议: 如果需要N条路并行读取数据，调用该函数N次，将获得N个独立的Reader用于
+	读取这些文件中不同的文件和位置，样本的混合效果也会更好。
+	参数Args:
+		filename_queue: 一个string类型的队列，存储需要读取的文件名
+	返回Returns:
+		返回一个对象，代表一个独立的样本，包含以下field：
+		height: result中的行数(32)
+		width: result中的列数(32)
+		depth: result中的颜色通道数(3)
+		key: 一个string类型的标量Tensor，描述样本的文件名和记录编号
+		label: 一个int32类型的Tensor，代表样本label，取值范围0~9
+		uint8image: 一个uint8类型，shape[height, width, depth]的Tensor，描述图像数据
 	"""
 	#Dimensions of the images in the CIFAR-10 dataset
 	class CIFAR10Record(object):
