@@ -75,6 +75,7 @@ def _activation_summary(x):
 	tf.summary.scalar(tensor_name + '/sparsity', tf.nn.zero_fraction(x))
 
 
+#两种不同的变量创建方式，区别在于是否应用了权值衰减
 def _variable_on_cpu(name, shape, initializer):
 	"""帮助创建一个存储在cpu存储器中的变量的辅助函数(helper)
 
@@ -262,6 +263,7 @@ def loss(logits, labels):
 	tf.add_to_collection("losses", cross_entropy_mean)
 
 	#总损失 = 交叉熵损失 + 所有的权重衰减项(L2 loss)
+	#实际上只有local3和local4产生了有效衰减项，因为conv1、conv2和softmax的factor为0.0
 	return tf.add_n(tf.get_collection('losses'), name='total_loss')
 
 def _add_loss_summaries(total_loss):
@@ -329,7 +331,7 @@ def train(total_loss, global_step):
 	#为梯度添加柱状图
 	for grad, var in grads:
 		if grad is not None:
-			tf.summary.histogram(var.op.name + '/gradients', grad)
+			tf.summary.histogram(var.op.name + '/gradients', grad) #记得这里留意下梯度在board中的名字是什么
 
 	#监测所有可训练参数的滑动平均数
 	variable_averages = tf.train.ExponentialMovingAverage(
@@ -337,7 +339,7 @@ def train(total_loss, global_step):
 	variables_averages_op = variable_averages.apply(tf.trainable_variables())
 
 	with tf.control_dependencies([variables_averages_op]):
-		train_op = tf.no_op(name='train')
+		train_op = tf.no_op(name='train')  #就返回一个operation？u kidding me？
 
 	return train_op
 
