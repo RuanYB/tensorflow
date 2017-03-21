@@ -319,6 +319,7 @@ def train(total_loss, global_step):
 	#计算梯度
 	with tf.control_dependencies([loss_averages_op]):
 		opt = tf.train.GradientDescentOptimizer(lr)
+		# Variable is always present, but gradient can be None.
 		grads = opt.compute_gradients(total_loss)
 
 	#应用梯度
