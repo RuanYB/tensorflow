@@ -61,7 +61,7 @@ def _activation_summary(x):
 	"""帮助创建激活值的summaries的辅助函数(helper)
 
 	创建一个summary用于绘制激活值的柱状图(histogram)
-	创建一个summary用于评估激活值得稀疏性(sparsity)
+	创建一个summary用于评估激活值的稀疏性(sparsity)
 
 	参数Args：
 		x: Tensor
@@ -100,8 +100,7 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
 
 	Args:
 		name: 变量名
-		shape: 存储int类型数据的list
-		stddev: truncated Gaussian的标准差
+		shape: 存储int类型数据的list		stddev: truncated Gaussian的标准差
 		wd: 添加L2-Loss权值衰减并指定参数
 	Returns：
 		Variable Tensor
@@ -120,7 +119,7 @@ def distorted_inputs():
 
 	Returns:
 		image: Images. 4维tensor，shape[batch_size, IMAGE_SIZE, IMAGE_SIZE, 3]
-		labels: Labels. 1维tenso，shape[batch_size]
+		labels: Labels. 1维tensor，shape[batch_size]
 
 	Raises:
 		ValueError: 没有data_dir参数
@@ -140,7 +139,7 @@ def inputs(eval_data):
 	"""使用Reader op为CIFAR评价构造输入数据
 
 	Args:
-		eval_data: 布尔值，表示是否使用训练或是评价数据集
+		eval_data: 布尔值，表示是使用未干扰的训练集，还是评价集
 	Returns:
 		images: Images. 4维tensor，shape[batch_size, IMAGE_SIZE, IMAGE_SIZE, 3]
 		labels: Labels. 1维tenso，shape[batch_size]
@@ -283,7 +282,7 @@ def _add_loss_summaries(total_loss):
 
 	#为所有独立的losses、total loss和losses的平均数附上标量summary
 	for l in losses+[total_loss]:
-		#将每一个loss命名为(raw)，loss平均数则依然为原来的名字
+		#将每一个loss命名为(raw)，对应的loss平均数则依然为原来的名字
 		tf.summary.scalar(l.op.name + ' (raw)', l)
 		tf.summary.scalar(l.op.name, loss_averages.average(l))
 
@@ -303,7 +302,7 @@ def train(total_loss, global_step):
 	"""
 	#影响学习率的变量
 	num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
-	decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
+	decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)   #decay rate以batch_size为单位
 
 	#根据步数指数衰减学习率
 	lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
@@ -348,19 +347,19 @@ def train(total_loss, global_step):
 def maybe_download_and_extract():
 	"""Download and extract the tarball from Alex's website."""
 	dest_directory = FLAGS.data_dir
-  	if not os.path.exists(dest_directory):
-    	os.makedirs(dest_directory)
-  	filename = DATA_URL.split('/')[-1]
-  	filepath = os.path.join(dest_directory, filename)
-  	if not os.path.exists(filepath):
-    	def _progress(count, block_size, total_size):
-      		sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
-          		float(count * block_size) / float(total_size) * 100.0))
-      		sys.stdout.flush()
-    	filepath, _ = urllib.request.urlretrieve(DATA_URL, filepath, _progress)
-    	print()
-    	statinfo = os.stat(filepath)
-    	print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
-  	extracted_dir_path = os.path.join(dest_directory, 'cifar-10-batches-bin')
-  	if not os.path.exists(extracted_dir_path):
+ 	if not os.path.exists(dest_directory):
+		os.makedirs(dest_directory)
+	filename = DATA_URL.split('/')[-1]
+	filepath = os.path.join(dest_directory, filename)
+	if not os.path.exists(filepath):
+		def _progress(count, block_size, total_size):
+			sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
+				float(count * block_size) / float(total_size) * 100.0))
+			sys.stdout.flush()
+		filepath, _ = urllib.request.urlretrieve(DATA_URL, filepath, _progress)
+		print()
+		statinfo = os.stat(filepath)
+		print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
+	extracted_dir_path = os.path.join(dest_directory, 'cifar-10-batches-bin')
+	if not os.path.exists(extracted_dir_path):
 		tarfile.open(filepath, 'r:gz').extractall(dest_directory)

@@ -14,6 +14,7 @@ import tensorflow as tf
 IMAGE_SIZE = 24
 
 #Global constants describing the CIFAR-10 data set
+#这也是cifar10数据集的数据分布
 NUM_CLASSES = 10
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 50000
 NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
@@ -93,7 +94,7 @@ def _generate_image_and_label_batch(image, label, min_queue_examples,
 		images, label_batch = tf.train.shuffle_batch(
 			[image, label],
 			batch_size=batch_size,
-			num_threads=num_preprocess_threads,
+			num_threads=num_preprocess_threads, #16
 			capacity=min_queue_examples + 3 * batch_size,
 			min_after_dequeue=min_queue_examples)
 	else:
@@ -125,6 +126,7 @@ def distorted_inputs(data_dir, batch_size):
 			raise ValueError('Failed to find file: ' + f)
 
 	#创建一个队列用于读取文件名filenames
+	#返回: A queue with the output strings. A QueueRunner for the Queue is added to the current Graph's QUEUE_RUNNER collection.
 	filename_queue = tf.train.string_input_producer(filenames)
 
 	#从filename_queue队列中的文件中读取样本
