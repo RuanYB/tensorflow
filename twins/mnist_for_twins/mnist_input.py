@@ -148,9 +148,9 @@ def generate_tfrecords(dataset_type):
 	depth = 1
 
 	#将每个（image, label）对写入Example的Feature属性中，构造TFRecords集
-	writer = tf.python_io.TFRecordWriter("data/train.tfrecords_%s_ver2" % dataset_type) 
+	writer = tf.python_io.TFRecordWriter("data/%s.tfrecords" % dataset_type) 
 	for index in range(images.shape[0]):
-		if index % 100 == 0:
+		if index % 1000 == 0:
 			print('已经完成存储 %d 张图片的TFRecords处理...' % index)
 		#将每一个图片扁平化之后，转换为字节数据
 		#image_raw = images[index].ravel().tostring()
@@ -184,8 +184,8 @@ def parse_tfrecords(tfrecord_type):
 		labels_dir = TEST_LABELS_PATH
 	else:
 		raise ValueError('please select correct tfrecord_type type: train or test')
-	filename = "data/train.tfrecords_%s" % tfrecord_type
-	filename_queue = tf.train.string_input_producer([filename], num_epochs=20)
+	filename = "data/%s.tfrecords" % tfrecord_type
+	filename_queue = tf.train.string_input_producer([filename])
 	reader = tf.TFRecordReader()
 
 	#返回文件名和文件
@@ -201,27 +201,52 @@ def parse_tfrecords(tfrecord_type):
 	rows = tf.cast(features['height'], tf.int32)
 	cols = tf.cast(features['width'], tf.int32)
 
-	image = tf.reshape(tf.decode_raw(features['image_raw'], tf.int32), [rows, cols])
+	image = tf.reshape(tf.decode_raw(features['image_raw'], tf.int32), [28, 28])
+	image = tf.cast(image, tf.float32)
 	label = tf.cast(features['labels'], tf.int32)
+	label = tf.reshape(label, [1])
+
+	# image = tf.decode_raw(features['image_raw'], tf.int32)
+	# image = tf.cast(image, tf.float32)
+	# label = tf.cast(features['labels'], tf.int32)
+
+	# image.set_shape([32, 32])
+	# label.set_shape([1])
 
 	return image, label
 
-def generate_image_and_label_batch():
+
+def generate_image_and_label_batch(image, label, min_after_dequeue, batch_size=50, shuffle=True):
 	"""
 	capacity must be larger than min_after_dequeue and 
 	the amount larger determines the maximum we will prefetch.  
 	Recommendation:
 	min_after_dequeue + (num_threads + a small safety margin) * batch_size
 	"""
-	image, label = parse_tfrecords('train')
-	# img_batch, label_batch = tf.train.shuffle_batch([image, label], batch_size=50, capacity=, min_after_dequeue=)
+	# MIN_AFTER_DEQUEUE = 1000
+	CAPACITY = min_after_dequeue + 3 * batch_size
+	# image, label = parse_tfrecords('train')
+	if shuffle:
+		image_batch, label_batch = tf.train.shuffle_batch(
+											[image, label], 
+											min_after_dequeue=min_after_dequeue,
+											batch_size=batch_size, 
+											capacity=CAPACITY) #allow smaller final batch参数默认为False 
+	else:
+		image_batch, label_batch = tf.train.batch(
+											[image, label], 
+											batch_size=batch_size, 
+											capacity=CAPACITY)
+	return image_batch, label_batch
 
 
+#=================================================DUMPED CODES========================================================
 def parse_single_tfrecord():
 	"""
 	for test
+	逐条解析example数据，不使用队列
 	"""
-	for serialized_example in tf.python_io.tf_record_iterator("data/train.tfrecords_train"):
+	for serialized_example in tf.python_io.tf_record_iterator("data/train.tfrecords"):
 		example = tf.train.Example()
 		example.ParseFromString(serialized_example)
 
@@ -237,7 +262,7 @@ def parse_single_tfrecord():
 
 		return reshaped_img, image
 
-#=================================================DUMPED CODES========================================================
+
 def load_train_images(idx_ubyte_file=TRAIN_IMAGES_PATH):
 	"""
     TRAINING SET IMAGE FILE (train-images-idx3-ubyte):
@@ -368,6 +393,7 @@ class DataSet(object):
 			return self._images[start:_index_in_epoch], self._labels[start:_index_in_epoch]
 
 
+#=======================================================RUN CODE=============================================================
 def run():
 	train_images = load_train_images()
 	train_labels = load_train_labels()
@@ -381,15 +407,17 @@ def run():
 
 
 if __name__ == '__main__':
-	# generate_tfrecords('train')
+	generate_tfrecords('test')
+
 	image, label = parse_single_tfrecord()
+
 	sess = tf.InteractiveSession()
 	init = tf.global_variables_initializer()
 	sess.run(init)
+
 	image_arr = sess.run(image)[:]
 	#哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈我干！！原来要从tensor中切片取出来元素组成array-like data	
 	print(image_arr)
 	print(label)
 	plt.imshow(image_arr, cmap='gray')
 	plt.show()
-	# sess.run([parse_single_tfrecord()])
