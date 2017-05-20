@@ -5,6 +5,7 @@
 import tensorflow as tf
 
 from mnist import inputs
+from universal_pert import universal_perturbation
 import mnist_train
 
 FLAGS = tf.app.flags.FLAGS
@@ -12,16 +13,9 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('model_dir', 'data/mnist_train', 
 							"""Directory where to import the model graph""")
 
-def feedforward(session, image_inp, output_op, input_op):
-	"""
-	前馈导数计算函数
-	"""
-	return session.run(output_op, feed_dict={
-									input_op: tf.reshape(image_inp, [-1, 28, 28, 1])})
-
 
 def generate_adv_exmp():
-	image_batch, label_batch = inputs('train')
+	image_batch, label_batch = inputs(data_type='train')
 
 	# 从检查点提取模型路径
 	ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
@@ -44,8 +38,24 @@ def generate_adv_exmp():
 		# gradient计算的是所有输出w.r.t每一个输入特征的导数之和，不能直接得到雅可比矩阵形式的结果，
 		# 所以必须每次取出一个输出值，分别计算关于输入的导数，最后组装起来
 		scalar_out = [tf.slice(softmax_linear_op, [0, i], [1, 1]) for i in range(10)]
-		print(sess.run(scalar_out, feed_dict={input_op: image_batch}))
+		# print(sess.run(scalar_out, feed_dict={input_op: image_batch}))
+		dydx = [tf.gradients(scalar_out[i], [input_op])[0] for i in range(10)] # why extract [0]?
 
+		def ff(image_inp):
+			"""
+			前馈导数计算函数
+			"""
+			return sess.run(softmax_linear_op, feed_dict={
+									input_op: np.reshape(image_inp, (-1, 28, 28, 1))})
+
+		def grads(image_inp, inds):
+			"""
+			梯度计算函数
+			"""
+			return [sess.run(dydx[i], feed_dict={input_op: image_inp}) for i in inds]
+
+		# 根据样本子集构造universal adversarial perturbation
+		v = universal_perturbation(dataset, ff, grads, delta=0.2)
 
 
 # =================MAIN FUNC & LAUNCH CODE==================
