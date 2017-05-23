@@ -173,7 +173,7 @@ def parse_tfrecords(tfrecord_type):
 	"""
 	读取TFRecords的函数
 	Args:
-		TFRecords格式数据文件
+		tfrecord_type: TFRecords格式数据文件
 	"""
 	#根据文件名生成一个队列
 	if 'train' == tfrecord_type:
@@ -218,10 +218,11 @@ def parse_tfrecords(tfrecord_type):
 
 def generate_image_and_label_batch(image, label, min_after_dequeue, batch_size=50, shuffle=True):
 	"""
-	capacity must be larger than min_after_dequeue and 
-	the amount larger determines the maximum we will prefetch.  
-	Recommendation:
-	min_after_dequeue + (num_threads + a small safety margin) * batch_size
+	CAUTION:
+		capacity must be larger than min_after_dequeue and 
+		the amount larger determines the maximum we will prefetch.  
+		Recommendation:
+		min_after_dequeue + (num_threads + a small safety margin) * batch_size
 	"""
 	# MIN_AFTER_DEQUEUE = 1000
 	CAPACITY = min_after_dequeue + 3 * batch_size
@@ -237,6 +238,37 @@ def generate_image_and_label_batch(image, label, min_after_dequeue, batch_size=5
 											[image, label], 
 											batch_size=batch_size, 
 											capacity=CAPACITY)
+	return image_batch, label_batch
+
+
+def generate_fix_data_batch(sess, pool_size=500):
+	"""
+	使用队列生成pool_size大小的image, label样本池，供下一步做伪随机采样
+	:param sess: 当前图所在的session
+	:param pool_size: 样本池大小，默认500
+	"""
+	image_size = [28, 28, 1]
+	image_batch = np.zero([pool_size] + image_size)
+	label_batch = np.zero([pool_size, 1])
+
+	image, label = parse_tfrecords(tfrecord_type='train')
+	image = tf.expand_dims(image, -1)
+
+	coord = tf.train.Coordinator()
+	try:
+		threads = tf.train.start_queue_runners(coord)
+
+		for i in range(pool_size):
+			img, lbl = sess.run([image, label])
+
+			image_batch[i] = img
+			label_batch[i] = lbl
+	except Exception as e:
+		coord.request_stop(e)
+
+	coord.request_stop()
+	coord.join(threads)
+
 	return image_batch, label_batch
 
 
@@ -338,6 +370,9 @@ def load_test_labels(idx_ubyte_file=TEST_LABELS_PATH):
 
 
 class DataSet(object):
+	"""
+	不以tfrecord数据格式为媒介，直接解析二进制mnsit数据
+	"""
 	def __init__(self, images, labels):
 		self._images = images
 		self._labels = labels
@@ -416,7 +451,7 @@ if __name__ == '__main__':
 	sess.run(init)
 
 	image_arr = sess.run(image)[:]
-	#哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈我干！！原来要从tensor中切片取出来元素组成array-like data	
+	# 哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈我干！！原来要从tensor中切片取出来元素组成array-like data	
 	print(image_arr)
 	print(label)
 	plt.imshow(image_arr, cmap='gray')
