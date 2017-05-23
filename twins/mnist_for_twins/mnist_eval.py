@@ -24,7 +24,7 @@ tf.app.flags.DEFINE_integer('batch_size', 50,
 									"""Number of examples to test in a batch""")
 
 def evaluate():
-	image_batch, label_batch = mnist.inputs('test')
+	image_batch, label_batch = mnist.inputs(data_type='test')
 
 	image_batch = tf.expand_dims(image_batch, -1)
 	label_batch = tf.reshape(label_batch, [50])
@@ -82,8 +82,9 @@ def evaluate():
 		#超时后由coordinator.join()报运行时异常
 		coord.join(threads, stop_grace_period_secs=10)
 
+
 def main(argv=None): 
 	evaluate()
 
-if __name__ =='__main__':
+if __name__ == '__main__':
 	tf.app.run()
