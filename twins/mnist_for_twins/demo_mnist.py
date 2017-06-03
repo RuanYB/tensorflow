@@ -135,9 +135,9 @@ def main(argv=None):
 											daemon=True, start=True))
 
 			saver = tf.train.Saver()
-			step = 0
+			step = 1
 
-			while step < 20000 and not coord.should_stop():
+			while step <= 20000 and not coord.should_stop():
 				if step % 100 == 0:
 					# 每隔100步打印一次accuracy
 					runtime_accuracy = sess.run(accuracy, feed_dict={keep_prob: 1.0})
