@@ -49,6 +49,9 @@ def evaluate():
 			print('No Checkpoint File Found!')
 			return 
 
+		graph = tf.get_default_graph()
+		keep_prob = graph.get_tensor_by_name('keep_prob:0')
+
 		#开启queue runner
 		coord = tf.train.Coordinator()
 		try:
@@ -65,7 +68,7 @@ def evaluate():
 			step = 0
 
 			while step < num_iter and not coord.should_stop():
-				predictions = sess.run(top_k_op)
+				predictions = sess.run(top_k_op, feed_dict={keep_prob: 1.0})
 				true_cnt += np.sum(predictions)
 				step += 1
 
