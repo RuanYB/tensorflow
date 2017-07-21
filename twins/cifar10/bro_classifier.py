@@ -13,7 +13,9 @@ import numpy as np
 from tensorflow.core.framework import graph_pb2 as gpb
 from google.protobuf import text_format as pbtf
 
-from cifar10_input import load_dataset
+from cifar10_input import generate_data
+from demo_cifar import pick_pert
+
 
 INPUT_TENSOR_NAME = 'input:0'
 ADV_SOFTMAX_TENSOR_NAME = 'final_result:0'
@@ -153,23 +155,23 @@ def main(_):
 			return sess.run(orin_activation_tensor, feed_dict={
 					orin_bottleneck_tensor: np.reshape(inp, (-1, BOTTLENECK_TENSOR_SIZE))})
 
-		# 对抗样本经过good bro之后的输出
+		# 同种干扰向量测试：对抗样本经过good bro之后的输出
 		orin_list = bottleneck_eval(FLAGS.eval_interval, test_set_size, orin_bottleneck_forward)
 
-		# def orin_input_forward(inp):
-		# 	return sess.run(orin_activation_tensor, feed_dict={
-		# 			orin_input_tensor: np.reshape(inp, (-1, 24, 24, 3))})
+		def orin_input_forward(inp):
+			return sess.run(orin_activation_tensor, feed_dict={
+					orin_input_tensor: np.reshape(inp, (-1, 24, 24, 3))})
 
-		# 测试误检率,准备Normal Example经过good bro的输出
-		# 使用全部测试集10000条样本
-		# img, _ = load_dataset(sess, FLAGS.bins_dir, 'test', 10000)
-		# normal example经过good bro之后的输出
-		# fn_orin_list = input_eval(step_size=FLAGS.eval_interval, dataset=img, ff=orin_input_forward)
+		# 重新加载测试集
+		_, testing_set = generate_data(sess, 'data/cifar-10-batches-bin', training_size=0, testing_size=10000)
+		v = np.load(os.path.join(FLAGS.pert_dir, 'universal_for_test.npy'))
+		# 挑选能够成功干扰的测试样本
+		testing_list = pick_pert(sess, v, orin_bottleneck_forward, testing_set, 'test', save=False)
 
 
 	with tf.Graph().as_default():
 		# 加载bad bro model
-		with tf.gfile.FastGFile(os.path.join(FLAGS.model_dir, 'cifar_adv_graph_2w.pb'), 'rb') as f:
+		with tf.gfile.FastGFile(os.path.join(FLAGS.model_dir, FLAGS.pb_dir), 'rb') as f:
 			graph_def = tf.GraphDef()
 			graph_def.ParseFromString(f.read())
 
@@ -183,20 +185,23 @@ def main(_):
 					"""
 					return sess.run(adv_activation_tensor, feed_dict={
 							adv_bottleneck_tensor: inp})
-
-				# 对抗样本经过bad bro之后的输出
+				# 同种干扰向量测试：对抗样本经过bad bro之后的输出
 				adv_list = bottleneck_eval(FLAGS.eval_interval, test_set_size, adv_bottleneck_forward)
 
-				# def adv_input_forward(inp):
-				# 	"""输入tensor为起始tensor：input
-				# 	"""
-				# 	return sess.run(adv_activation_tensor, feed_dict={
-				# 			adv_input_tensor: inp})
+				def adv_input_forward(inp):
+					"""输入tensor为起始tensor：input
+					"""
+					return sess.run(adv_activation_tensor, feed_dict={
+							adv_input_tensor: inp})
+				# 不同干扰向量测试：对抗样本经过bad bro之后的输出
+				normal_result_list = input_eval(step_size=FLAGS.eval_interval, 
+											dataset=testing_list['normal_image'], 
+											ff=adv_input_forward)
+				perted_result_list = input_eval(step_size=FLAGS.eval_interval, 
+											dataset=testing_list['perted_image'], 
+											ff=adv_input_forward)
 
-				# normal example经过bad bro之后的输出
-				# fn_adv_list = input_eval(step_size=FLAGS.eval_interval, dataset=img, ff=adv_input_forward)
-
-	# good bro和bad bro的输出label
+	# 同种干扰向量测试：good bro和bad bro的输出label
 	orin_labels = np.argmax(orin_list, 1)
 	adv_labels = np.argmax(adv_list, 1)
 	
@@ -205,30 +210,15 @@ def main(_):
 	# test_fake_labels = load_npy('test', 'fake_label', FLAGS.pert_dir).astype(int)
 
 	half_test_size = int(test_set_size // 2)
-	# 恶意样本识别正常的数量
+	# 同种干扰向量测试：恶意样本识别正常的数量
 	sum_adv = np.sum(orin_labels.flatten()[:half_test_size] == adv_labels.flatten()[:half_test_size])
-	# 正常样本识别正常的数量
+	# 同种干扰向量测试：正常样本识别正常的数量
 	sum_norm = np.sum(orin_labels.flatten()[half_test_size:] != adv_labels.flatten()[half_test_size:])
 
 	# top-1准确度(综合)
 	# 由于test bottleneck集合前一半为恶意样本，后一半为正常样本
 	# 所以正确率取前半部分相等的和后半部分不等的数量
 	accuracy_top_1 = float(sum_adv + sum_norm) / float(test_set_size)
-	# # accuracy_validate_1 = top_n_accuray(orin_labels, adv_labels, test_set_size, 1)
-	# # top-2准确度
-	# accuracy_top_2 = top_n_accuray(orin_labels, adv_labels, test_set_size, 2)
-	# # top-3准确度
-	# accuracy_top_3 = top_n_accuray(orin_labels, adv_labels, test_set_size, 3)	
-	# # top-4准确度
-	# accuracy_top_4 = top_n_accuray(orin_labels, adv_labels, test_set_size, 4)
-	# # top-5准确度
-	# accuracy_top_5 = top_n_accuray(orin_labels, adv_labels, test_set_size, 5)
-
-	# ==========================
-	# 测试真实label位于adversarial classifier输出激活值的top-n信息
-	# test_true_labels = load_npy('test', 'true_label', FLAGS.pert_dir).astype(int)
-	# test_true_labels = test_true_labels[:test_set_size]
-	# ==========================
 	
 	# False Positive结果
 	# 恶意样本被认为正常的比率，基数为测试集一半大小
@@ -239,48 +229,19 @@ def main(_):
 
 	# 正常样本被认为恶意的比率（false alarm rate）
 	fn_top_1 = 1.0 - float(sum_norm / half_test_size)
-	# fn_top_1 = top_n_accuray(fn_norm_labels, fn_adv_labels, img.shape[0], 1)
-	# fn_top_2 = top_n_accuray(fn_norm_labels, fn_adv_labels, img.shape[0], 2)
-	# fn_top_3 = top_n_accuray(fn_norm_labels, fn_adv_labels, img.shape[0], 3)
-	# fn_top_4 = top_n_accuray(fn_norm_labels, fn_adv_labels, img.shape[0], 4)
-	# fn_top_5 = top_n_accuray(fn_norm_labels, fn_adv_labels, img.shape[0], 5)
-
-	# ==========================
-	# top = []
-	# for j in range(adv_labels.shape[0]):
-	# 	# 获取真实label在对抗分类器输出激活值中的下标
-	# 	index = np.argwhere(adv_labels[j] == test_true_labels[j])
-	# 	if index.size == 0:
-	# 		top.append(None)
-	# 	else:
-	# 		top.append(index[0][0])
-
-	# top_len = len(top)
-	# print('>>TOP SIZE:', top_len)
-
-	# top = np.array(top)
-
-	# error_top_1 = float(np.sum(top == 0)) / float(top_len)
-	# error_top_2 = float(np.sum(top == 1)) / float(top_len)
-	# error_top_3 = float(np.sum(top == 2)) / float(top_len)
-	# error_top_4 = float(np.sum(top == 3)) / float(top_len)
-	# error_top_5 = float(np.sum(top == 4)) / float(top_len)
-	# ==========================
 
 	fmt = '|{0:^8}|{1:^20.4f}|{2:^21.4f}|'
 
 	print('|+++++++++++++++++++++++++++++++++++++++++++++++++++|')
 	print('|            BAD BRO Detection Statistics           |')
-	print('|  NORM PART SIZE:%5d  |   ADV PART SIZE:%5d   |' % (half_test_size, half_test_size))
+	print('|  NORM PART SIZE:%5d   |   ADV PART SIZE:%5d   |' % (half_test_size, half_test_size))
 	print('|           Total Detection Rate: %6.4f            |' % accuracy_top_1)
 	print('|  TOPn | False Positive Rate | False Negative Rate |')
 	print(fmt.format(1, fp_top_1, fn_top_1))
-	# print(fmt.format(2, accuracy_top_2, fn_top_2))
-	# print(fmt.format(3, accuracy_top_3, fn_top_3))
-	# print(fmt.format(4, accuracy_top_4, fn_top_4))
-	# print(fmt.format(5, accuracy_top_5, fn_top_5))
 	print('|+++++++++++++++++++++++++++++++++++++++++++++++++++|')
 	print('说明：\r\n1. Total Detection Rate基数为整体样本集\r\n2. FP和FN Rate基数为半数样本集')
+
+
 
 
 # ===================== LAUNCH CODE =====================
@@ -306,6 +267,11 @@ if __name__  == '__main__':
 			type=str, 
 			default='data/cifar-10-batches-bin', 
 			help='Path to .bin files.')
+	parser.add_argument(
+			'--pb_dir', 
+			type=str, 
+			default='pb/adv_graph_norm_as_fake_2w.pb', 
+			help='Path to pre-trained .pb files.')
 	parser.add_argument(
 			'--eval_interval', 
 			type=int, 
