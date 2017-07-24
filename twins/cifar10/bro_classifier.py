@@ -13,9 +13,8 @@ import numpy as np
 from tensorflow.core.framework import graph_pb2 as gpb
 from google.protobuf import text_format as pbtf
 
-from cifar10_input import generate_data
 from demo_cifar import pick_pert
-
+from cifar10_input import generate_data
 
 INPUT_TENSOR_NAME = 'input:0'
 ADV_SOFTMAX_TENSOR_NAME = 'final_result:0'
@@ -166,7 +165,7 @@ def main(_):
 		_, testing_set = generate_data(sess, 'data/cifar-10-batches-bin', training_size=0, testing_size=10000)
 		v = np.load(os.path.join(FLAGS.pert_dir, 'universal_for_test.npy'))
 		# 挑选能够成功干扰的测试样本
-		testing_list = pick_pert(sess, v, orin_bottleneck_forward, testing_set, 'test', save=False)
+		testing_list = pick_pert(sess, v, orin_input_forward, testing_set, 'test', save=False)
 
 
 	with tf.Graph().as_default():
@@ -230,6 +229,15 @@ def main(_):
 	# 正常样本被认为恶意的比率（false alarm rate）
 	fn_top_1 = 1.0 - float(sum_norm / half_test_size)
 
+	# 不同干扰向量测试：恶意样本识别正常的数量
+	sum_adv_2 = np.sum(testing_list['fake_label'] == np.argmax(perted_result_list, 1))
+	# 不同干扰向量测试：正常样本识别正常的数量
+	sum_norm_2 = np.sum(testing_list['true_label'] != np.argmax(normal_result_list, 1))
+	accuracy_top_2 = float(sum_adv_2 + sum_norm_2) / float(testing_list['fake_label'].shape[0]*2)
+	fp_top_2 = 1.0 - float(sum_adv_2 / testing_list['fake_label'].shape[0])
+	fn_top_2 = 1.0 - float(sum_norm_2 / testing_list['fake_label'].shape[0])
+
+
 	fmt = '|{0:^8}|{1:^20.4f}|{2:^21.4f}|'
 
 	print('|+++++++++++++++++++++++++++++++++++++++++++++++++++|')
@@ -238,10 +246,11 @@ def main(_):
 	print('|           Total Detection Rate: %6.4f            |' % accuracy_top_1)
 	print('|  TOPn | False Positive Rate | False Negative Rate |')
 	print(fmt.format(1, fp_top_1, fn_top_1))
+	print('|          Test with Different Perturbation         |')
+	print('|           Total Detection Rate: %6.4f            |' % accuracy_top_2)
+	print(fmt.format(1, fp_top_2, fn_top_2))
 	print('|+++++++++++++++++++++++++++++++++++++++++++++++++++|')
 	print('说明：\r\n1. Total Detection Rate基数为整体样本集\r\n2. FP和FN Rate基数为半数样本集')
-
-
 
 
 # ===================== LAUNCH CODE =====================
@@ -270,7 +279,7 @@ if __name__  == '__main__':
 	parser.add_argument(
 			'--pb_dir', 
 			type=str, 
-			default='pb/adv_graph_norm_as_fake_2w.pb', 
+			default='adv_graph_norm_as_fake_2w.pb', 
 			help='Path to pre-trained .pb files.')
 	parser.add_argument(
 			'--eval_interval', 
