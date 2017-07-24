@@ -11,8 +11,6 @@ from datetime import datetime
 import tensorflow as tf
 import numpy as np
 
-from cifar10_input import generate_retrain_data
-
 from tensorflow.python.platform import gfile
 from tensorflow.python.framework import graph_util
 from tensorflow.core.framework import graph_pb2 as gpb
@@ -82,6 +80,16 @@ def load_npy(file_type, file_name, npy_dir):
 	"""
 	path = os.path.join(npy_dir, ('%s_%s.npy' % (file_type, file_name)))
 	return np.load(path)
+
+
+def special_random_num(except_num, start=0, end=1):
+	"""generate a random number between start and end except for specific number.
+	"""
+	temp = except_num
+	while  temp == except_num:
+		temp = random.randrange(start, end)
+	# print('formal num:%d, latter num:%d' % (except_num, temp))
+	return temp
 
 
 def create_cifar_graph():
@@ -168,7 +176,23 @@ def get_random_cached_bottlenecks(how_many, bottleneck_type, index_bound, label_
 			path = get_bottleneck_path(bottleneck_type, index, index_bound, FLAGS.bottleneck_dir)
 
 			bottleneck = get_bottleneck_value(path)
-			ground_truth = label_list[int(index % half_bound)]
+
+			# ==================================================
+			# option 1: set normal example's label as corresponding adversarial example's label
+			# ground_truth = label_list[int(index % half_bound)]
+
+			# (unfeasible)option 2: set normal example's label as a out-of-bound value, e.g. 10
+			# if index >= half_bound:
+			# 	ground_truth = 10.0
+			# else:
+			# 	ground_truth = int(label_list[index])
+
+			# option 3: set normal example's labels as a random number except for original label
+			if index < half_bound:
+				ground_truth = int(label_list[index])
+			else:
+				ground_truth = special_random_num(int(label_list[index-half_bound]), end=9)
+			# ==================================================
 
 			bottlenecks.append(bottleneck)
 			ground_truths.append(ground_truth)
@@ -181,7 +205,23 @@ def get_random_cached_bottlenecks(how_many, bottleneck_type, index_bound, label_
 			path = get_bottleneck_path(bottleneck_type, i, index_bound, FLAGS.bottleneck_dir)
 
 			bottleneck = get_bottleneck_value(path)
-			ground_truth = label_list[int(i % half_bound)]
+
+			# ==================================================
+			# option 1: set normal example's label as corresponding adversarial example's label
+			# ground_truth = label_list[int(i % half_bound)]
+
+			# (unfeasible)option 2: set normal example's label as a out-of-bound value, e.g. 10
+			# if i >= half_bound:
+			# 	ground_truth = 10
+			# else:
+			# 	ground_truth = int(label_list[index])
+
+			# option 3: set normal example's labels as a random number except for original label
+			if i < half_bound:
+				ground_truth = int(label_list[i])
+			else:
+				ground_truth = special_random_num(int(label_list[i-half_bound]), end=9)
+			# ==================================================
 
 			bottlenecks.append(bottleneck)
 			ground_truths.append(ground_truth)
@@ -318,18 +358,12 @@ def main(_):
 	init = tf.global_variables_initializer()
 	sess.run(init)
 
-	# training_set, testing_set = generate_retrain_data(sess, 
-	# 												'data/cifar-10-batches-bin', 
-	# 												500,
-	# 												100)
-	# print(sess.run(bottleneck_tensor, feed_dict={input_tensor:training_set}))
-
 	# Run the training for as many cycles as requested on the command line.
 	for i in range(FLAGS.how_many_training_steps):
 		train_bottlenecks, train_ground_truth, _ = get_random_cached_bottlenecks(
 															FLAGS.train_batch_size, 
 															'train', 
-															train_set_size, 
+															train_set_size-1, 
 															train_fake_labels)
 
 		train_summary, _ = sess.run([merged, train_step], feed_dict={bottleneck_input: np.array(train_bottlenecks),
@@ -350,7 +384,7 @@ def main(_):
 			validation_bottlenecks, validation_ground_truth, _ = get_random_cached_bottlenecks(
 																	FLAGS.validation_batch_size,
 																	'validate',
-																	validate_set_size,
+																	validate_set_size-1,
 																	validate_fake_labels)
 
 			# Run a validation step and capture training summaries for TensorBoard
@@ -371,7 +405,7 @@ def main(_):
 	test_bottlenecks, test_ground_truth, test_filenames = get_random_cached_bottlenecks(
 																FLAGS.test_batch_size,
 																'test',
-																test_set_size,
+																test_set_size-1,
 																test_fake_labels)
 	test_accuracy, predictions = sess.run([evaluation_step, prediction], 
 											feed_dict={
@@ -474,8 +508,8 @@ if __name__ == '__main__':
 	parser.add_argument(
 			'--how_many_training_steps',
 			type=int,
-			default=20000,
-			help='How many training steps to run before ending.') #25000
+			default=25000,
+			help='How many training steps to run before ending.') #20000
 	parser.add_argument(
 			'--eval_step_interval',
 			type=int,
