@@ -14,6 +14,7 @@ import sys, getopt
 from urllib import request
 import zipfile
 from timeit import time
+import math
 
 from prepare_imagenet_data import preprocess_image_batch, create_imagenet_npy, undo_image_avg
 from universal_pert import universal_perturbation
@@ -81,9 +82,7 @@ def pick_pert(sub_dirs, image_names, pert, f):
             # 文件名的格式为：【文件名】 + 【模型预测值】
             perted_pred = int(np.argmax(np.array(f(image_perturbed)).flatten()))
             if int(np.argmax(np.array(f(image_original)).flatten())) != perted_pred:
-                perted_name.append(image_names[i][j] + '-' + str(perted_pred))、
-
-                # 顺便计算bottleneck值，避免重复计算
+                perted_name.append(image_names[i][j] + '-' + str(perted_pred))
 
                 cnt += 1
             else:
@@ -94,6 +93,68 @@ def pick_pert(sub_dirs, image_names, pert, f):
         print('|++++++++++++++++++++++++++++++++++++++++++++++++++++')
         print('|++PICK PERT: Folder %s is processed successfully!!' % str(dir_name))
         print('|++Success Num: %d @ Fail Num: %d' % (cnt, (total_cnt - cnt)))
+
+
+def pick_pert_2(sub_dirs, image_names, pert, f):
+    """利用计算好的干扰筛选测试集,验证集
+    """
+    for i in range(len(sub_dirs)):        
+        dir_name = os.path.basename(sub_dirs[i]) # 'test' or 'vali'
+        pert_path = os.path.join('data/pick_pert', dir_name)
+
+        if not os.path.exists(pert_path):
+            os.makedirs(pert_path)
+
+        perted_file = []
+        cnt = 0 # 干扰成功样本计数
+        prefix_path = sub_dirs[i]
+        # 测试集，验证集各取一半（50000，25000）
+        if dir_name == 'test':
+            limit_cnt = 50000
+        else:
+            limit_cnt = 25000
+        total_cnt = min(len(image_names[i]), limit_cnt) # 需要挑选的样本数（test 50000，vali 25000）
+        num_per_class = int(total_cnt / 1000) # 1000个类别平均划分的测试/验证样本数
+        orin_file = np.zeros((1000, num_per_class+1), dtype=np.int) # 记录干扰成功样本的真实label
+
+        for j in range(len(image_names[i])):
+            img_path = os.path.join(prefix_path, image_names[i][j])
+
+            image_original = read_n_preprocess(img_path) # return a array of dimension 4 
+            # 计算裁剪后的干扰量，重新生成对抗样本
+            clipped_v = np.clip(undo_image_avg(image_original[0,:,:,:] + pert[0,:,:,:]), 0, 255) - np.clip(undo_image_avg(image_original[0,:,:,:]), 0, 255)
+            image_perturbed = image_original + clipped_v[None, :, :, :]
+
+            # 筛选干扰成功和失败的文件名
+            # 文件名的格式为：【文件名】 + 【模型预测值】
+            perted_pred = int(np.argmax(np.array(f(image_perturbed)).flatten()))
+            orin_pred = int(np.argmax(np.array(f(image_original)).flatten()))
+            if orin_pred != perted_pred:
+                perted_file.append(image_names[i][j] + '-' + str(perted_pred))
+
+                cnt += 1
+                # 顺便计算bottleneck值，避免重复计算
+                orin_file[int((cnt-1)/num_per_class)][(cnt-1)%num_per_class+1] = orin_pred
+                if cnt % num_per_class == 0:
+                    # 填充真实label，每行结束时写入该行有效label数量
+                    orin_file[int((cnt-1)/num_per_class)][0] = num_per_class
+                if cnt >= total_cnt:
+                    break
+        orin_file[int((cnt-1)/num_per_class)][0] = (cnt-1) % num_per_class +1
+        # 保存干扰成功样本的original label
+        np.save(os.path.join('data/ground_truth', 'orin_%s.npy' % dir_name), orin_file)
+        
+        # 以num_per_class个样本为单位生成pick pert文件
+        for i in range(math.ceil(cnt/num_per_class)):
+            start = i * num_per_class
+            end = min((i+1)*num_per_class, cnt)
+            dest_path = os.path.join(pert_path, '%s_%d.txt' % (dir_name, i))
+            # 保存文件名和对应的label数据为.txt文件
+            save_pert(data_list=[perted_file[start : end]], dest_path_list=[dest_path])
+
+        print('|++++++++++++++++++++++++++++++++++++++++++++++++++++')
+        print('|++PICK PERT: Folder %s is processed successfully!!' % str(dir_name))
+        print('|++Success Num: %d' % cnt)
 
 
 # =================================BOTTLENECK RELATED=================================
@@ -109,7 +170,6 @@ def create_image_lists(pert_dir):
     dirs = dirs[1:]
     Matrix = {}
     
-
     for d in dirs:
         basename = os.path.basename(d)
         Matrix[basename] = [x[2] for x in os.walk(d)][0]
@@ -427,8 +487,9 @@ if __name__ == '__main__':
         print(">> Found a pre-computed universal perturbation! Retrieving it from ", file_perturbation)
         v = np.load(file_perturbation)
 
-    if not os.path.exists(PATH_PERT):
-        dirs = [x[0] for x in os.walk(PATH_TRAIN_IMAGENET)]
+    if not os.path.exists(os.path.join(PATH_PERT, 'train')):
+        # 处理训练集生成pick_pert文件
+        dirs = [x[0] for x in os.walk(os.path.join(PATH_TRAIN_IMAGENET, 'train'))]
         dirs = dirs[1:]
 
         dirs = sorted(dirs)
@@ -443,39 +504,16 @@ if __name__ == '__main__':
         # pick out and save examples that can be perturbed successfully 
         pick_pert(dirs, Matrix, v, f)
 
-    sess.close()
+    if not os.path.exists(os.path.join(PATH_PERT, 'test')): 
+        # 处理test，vali样本集生成pick_pert文件
+        dirs = ['D:/Scholarship/dataset/ILSVRC2012/test', 'D:/Scholarship/dataset/ILSVRC2012/vali']
+        Matrix = [0 for x in range(2)]
+        it = 0
+        for d in dirs:
+            for _, _, filename in os.walk(d):
+                Matrix[it] = filename
+            it += 1
+        # pick out and save examples that can be perturbed successfully 
+        pick_pert_2(dirs, Matrix, v, f)
 
-    #===========================Test the perturbation on the image========================
-    # print(">> Testing the universal perturbation on an image")
-
-    # labels = open(os.path.join('data', 'labels.txt'), 'r').read().split('\n')
-
-    # image_original = preprocess_image_batch([PATH_TEST_IMAGE], img_size=(299, 299), color_mode="rgb")
-    # label_original = np.argmax(f(image_original), axis=1).flatten()
-
-    # str_label_original = labels[np.int(label_original)-1].split(',')[0] #?????
-
-    # # Clip the perturbation to make sure images fit in uint8
-    # #undo_image_avg()：将规则化的图片复原，3个通道都加上平均值
-    # clipped_v = np.clip(undo_image_avg(image_original[0,:,:,:]+v[0,:,:,:]), 0, 255) - np.clip(undo_image_avg(image_original[0,:,:,:]), 0, 255)
-
-    # print(v.shape) # [1,224,224,3]
-    # print(clipped_v.shape) #[224,224,3]
-
-    # image_perturbed = image_original + clipped_v[None, :, :, :]
-    # label_perturbed = np.argmax(f(image_perturbed), axis=1).flatten()
-    # str_label_perturbed = labels[np.int(label_perturbed)-1].split(',')[0]
-
-
-    # #=================================Show original and perturbed image======================================
-    # plt.figure()
-    # #subplot(nrows, ncols, plot_number)
-    # plt.subplot(1, 2, 1)
-    # plt.imshow(undo_image_avg(image_original[0, :, :, :]).astype(dtype='uint8'), interpolation=None)
-    # plt.title(str_label_original)
-
-    # plt.subplot(1, 2, 2)
-    # plt.imshow(undo_image_avg(image_perturbed[0, :, :, :]).astype(dtype='uint8'), interpolation=None)
-    # plt.title(str_label_perturbed)
-
-    # plt.show()
+    persisted_sess.close()
