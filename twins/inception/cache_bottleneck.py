@@ -180,7 +180,7 @@ def create_image_lists(pert_dir):
     # ILSVRC2012数据集下有1000个类，每个类有1300个样本
     # label矩阵的每行的第一个元素用来记录该类样本label数
     # 只用于保存，不计入result列表中
-    training_labels = np.zeros((train_set_size, 1301), dtype=np.int)
+    training_labels = np.zeros((train_set_size, 601), dtype=np.int)
 
     # load n reorganize training set 
     for i, filename in enumerate(Matrix['train']):
@@ -191,20 +191,31 @@ def create_image_lists(pert_dir):
         with open(file_path, 'r') as pert_file:
             pert_string = pert_file.read()
         pert_values = [str(x) for x in pert_string.split(',')]
-        training_labels[i][0] = len(pert_values)
 
+        # 训练集每类只取一半数量的样本（1300 / 2 = 600）
+        limit_cnt = min(len(pert_values), 600)
+        cnt = 0
         for j, value in enumerate(pert_values):
+
             temp = value.split('-')
             training_images.append(str(temp[0]))
             training_labels[i][j+1] = int(temp[1])
 
+            cnt += 1
+            if cnt == limit_cnt:
+                training_labels[i][0] = j+1
+                break
+
         result[i] = {'dir': filename.split('.')[0], 
                         'train': training_images}
+
+    print('>>Save %d training labels' % np.sum(np.array(training_labels)[:,0]))
     np.save(os.path.join(label_dir, 'adv_train_labels.npy'), training_labels)
 
     # load n reorganize testing n validation set
     # test set size: 50,000, validation set size: 25,000
     for category in ['test', 'vali']:
+
         if category == 'test':
             labels = np.zeros((train_set_size, 51), dtype=np.int)
         elif category == 'vali':
@@ -225,6 +236,7 @@ def create_image_lists(pert_dir):
 
             result[i][category] = images
         np.save(os.path.join(label_dir, 'adv_%s_labels.npy' % category), labels)
+        print('>>Save %d %s labels' % (np.sum(np.array(labels)[:,0]), category))
 
     return result
 
@@ -298,17 +310,18 @@ def run_bottleneck_on_image(sess, image_data, input_tensor, bottleneck_tensor):
 
 
 def create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index, index,
-                             category, bottleneck_type, sess, input_tensor, bottleneck_tensor):
+                             category, bottleneck_type, sess, input_tensor, bottleneck_tensor, pert):
     if os.path.exists(bottleneck_path):
         os.remove(bottleneck_path)
     image_path = get_image_path(image_lists, label_index, index, image_dir, category)
+    # print('>>Create Bottleneck File——Extract Image From Path: %s' % image_path)
     if not gfile.Exists(image_path):
         tf.logging.fatal('>>Cant create bottleneck: Image does not exist %s', image_path)
 
     image_data = read_n_preprocess(image_path)
     if bottleneck_type != 0:
         # 添加对抗干扰
-        clipped_v = np.clip(undo_image_avg(image_original[0,:,:,:] + pert[0,:,:,:]), 0, 255) - np.clip(undo_image_avg(image_original[0,:,:,:]), 0, 255)
+        clipped_v = np.clip(undo_image_avg(image_data[0,:,:,:] + pert[0,:,:,:]), 0, 255) - np.clip(undo_image_avg(image_data[0,:,:,:]), 0, 255)
         image_data = image_data + clipped_v[None, :, :, :]
 
     bottleneck_values = run_bottleneck_on_image(sess, image_data, input_tensor, bottleneck_tensor)
@@ -319,7 +332,7 @@ def create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index,
 
 def get_or_create_bottleneck(sess, image_lists, label_index, index,
                                         image_dir, category, bottleneck_dir,
-                                        input_tensor, bottleneck_tensor, bottleneck_type):
+                                        input_tensor, bottleneck_tensor, pert, bottleneck_type):
     """Retrieves or calculates bottleneck values for an image.
     Args:
         image_lists: List of training images for each label.
@@ -339,7 +352,8 @@ def get_or_create_bottleneck(sess, image_lists, label_index, index,
 
     bottleneck_path = get_bottleneck_path(image_lists, label_index, index, bottleneck_dir, category, bottleneck_type)
     if not os.path.exists(bottleneck_path):
-        create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index, index, category, bottleneck_type, sess, input_tensor, bottleneck_tensor)
+        create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index, index, category, 
+                                bottleneck_type, sess, input_tensor, bottleneck_tensor, pert)
     with open(bottleneck_path, 'r') as bottleneck_file:
         bottleneck_string = bottleneck_file.read()
 
@@ -350,7 +364,8 @@ def get_or_create_bottleneck(sess, image_lists, label_index, index,
         print("Invalid float found, recreating bottleneck")
         did_hit_error = True
     if did_hit_error:
-        create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index, index, category, bottleneck_type, sess, input_tensor, bottleneck_tensor)
+        create_bottleneck_file(bottleneck_path, image_dir, image_lists, label_index, index, category, 
+                                bottleneck_type, sess, input_tensor, bottleneck_tensor, pert)
         with open(bottleneck_path, 'r') as bottleneck_file:
             bottleneck_string = bottleneck_file.read()
         # Allow exceptions to propagate here, since they shouldn't happen after a fresh creation
@@ -359,7 +374,7 @@ def get_or_create_bottleneck(sess, image_lists, label_index, index,
     return bottleneck_values
 
 
-def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, input_tensor, bottleneck_tensor):
+def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, input_tensor, bottleneck_tensor, pert):
     """Ensures all the training, testing, and validation bottlenecks are cached.
     Args:
         sess: The current active TensorFlow Session.
@@ -377,10 +392,10 @@ def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, input_tensor
                 # generate corresponding bottleneck file of original n adversarial example
                 get_or_create_bottleneck(sess, image_lists, label_index, index,
                                         image_dir, category, bottleneck_dir,
-                                        input_tensor, bottleneck_tensor, bottleneck_type=0)
+                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=0)
                 get_or_create_bottleneck(sess, image_lists, label_index, index,
                                         image_dir, category, bottleneck_dir,
-                                        input_tensor, bottleneck_tensor, bottleneck_type=1)
+                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=1)
 
                 how_many_bottlenecks += 1
             print('>>Folder %s: %d %s bottleneck files has been created!!' % 
@@ -526,6 +541,7 @@ if __name__ == '__main__':
 
     # 生成bottleneck文件
     image_lists = create_image_lists(PATH_PERT)
-    cache_bottlenecks(persisted_sess, image_lists, PATH_IMAGE, PATH_BOTTLENECK, persisted_input, persisted_bottleneck)
+    cache_bottlenecks(persisted_sess, image_lists, PATH_IMAGE, PATH_BOTTLENECK, 
+                        persisted_input, persisted_bottleneck, v)
 
     persisted_sess.close()
