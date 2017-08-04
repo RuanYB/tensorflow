@@ -38,7 +38,7 @@ def get_image_path(image_lists, label_index, index, image_dir, category):
     return full_path
 
 
-def get_bottleneck_path(image_lists, label_index, index, bottleneck_dir, category, b_type=0):
+def get_bottleneck_path(image_lists, label_index, index, bottleneck_dir, category, b_type=True):
     """Returns a path to a bottleneck file for a label at the given index.
     Args:
         category: Name string of set to pull images from - train, test, or vali.
@@ -47,23 +47,22 @@ def get_bottleneck_path(image_lists, label_index, index, bottleneck_dir, categor
         File system path string to an bottleneck that requested.
         e.g. 'bottleneck/train/norm_n0157841_1.txt'
     """
+    # label_name = image_lists[label_index]['dir']
+    # if label_index >= len(image_lists):
+    #     tf.logging.fatal('Label index does not exist: ', label_index)
+    # if category not in label_lists:
+    #     tf.logging.fatal('Category does not exist: ', category)
+    # category_list = label_lists[category]
+    # if not category_list:
+    #     tf.logging.fatal('Label %s has no images in the category %s.',
+    #                      label_name, category)
+
     label_name = image_lists[label_index]['dir']
-    if label_index >= len(image_lists):
-        tf.logging.fatal('Label does not exist %s.', label_name)
-    label_lists = image_lists[label_index]
-    if category not in label_lists:
-        tf.logging.fatal('Category does not exist %s.', category)
-    category_list = label_lists[category]
-    if not category_list:
-        tf.logging.fatal('Label %s has no images in the category %s.',
-                         label_name, category)
-  
-    sub_dir = label_lists['dir']
     bottleneck_type = 'norm'
-    if b_type != 0:
+    if b_type:
         bottleneck_type = 'adv'
 
-    return os.path.join(bottleneck_dir, category, '%s_%s_%d.txt' % (bottleneck_type, sub_dir, index))
+    return os.path.join(bottleneck_dir, category, '%s_%s_%d.txt' % (bottleneck_type, label_name, index))
 
 
 def run_bottleneck_on_image(sess, image_data, input_tensor, bottleneck_tensor):
@@ -159,10 +158,10 @@ def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, input_tensor
                 # generate corresponding bottleneck file of original n adversarial example
                 get_or_create_bottleneck(sess, image_lists, label_index, index,
                                         image_dir, category, bottleneck_dir,
-                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=0)
+                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=True)
                 get_or_create_bottleneck(sess, image_lists, label_index, index,
                                         image_dir, category, bottleneck_dir,
-                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=1)
+                                        input_tensor, bottleneck_tensor, pert, bottleneck_type=False)
 
                 how_many_bottlenecks += 1
             print('>>Folder %s: %d %s bottleneck files has been created!!' % 

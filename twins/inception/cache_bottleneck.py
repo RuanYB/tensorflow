@@ -17,7 +17,7 @@ from timeit import time
 import math
 
 from prepare_imagenet_data import preprocess_image_batch, create_imagenet_npy, undo_image_avg
-from bottleneck_util import get_image_path, get_bottleneck_path, run_bottleneck_on_image, create_bottleneck_file, get_or_create_bottleneck, cache_bottlenecks
+from bottleneck_util import cache_bottlenecks
 from universal_pert import universal_perturbation
 
 
@@ -274,7 +274,7 @@ if __name__ == '__main__':
     persisted_sess = tf.Session()
     # inception_model_path = os.path.join('D:/Workspace/tensorflow/twins/inception/inception_pretrain', 
     #                                         'classify_image_graph_def.pb')
-    inception_model_path = os.path.join('data', 'tensorflow_inception_graph.pb')
+    inception_model_path = os.path.join('data/graph', 'tensorflow_inception_graph.pb')
 
     if os.path.isfile(inception_model_path) == 0:
         print("Downloading Inception model...")
