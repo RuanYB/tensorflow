@@ -62,7 +62,7 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 	for i in range(num_of_batch):
 		start = i * FLAGS.batch_size
 		end = min((i+1)*FLAGS.batch_size, total_num)
-		image_batch = preprocess_image_batch(filenames[start:end])
+		image_batch = preprocess_image_batch(path_test_set, filenames[start:end], (256,256), (224,224))
 		clipped_v = np.clip(undo_image_avg(image_batch + pert), 0, 255) - np.clip(undo_image_avg(image_batch), 0, 255)
 		image_perturbed_batch = image_batch + clipped_v
 
@@ -90,6 +90,8 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 			res_labels[already_get : half_how_many] = adv_labels[mask][:temp_cnt]
 			res_labels[(already_get+half_how_many) : how_many] = orin_labels[mask][:temp_cnt]
 
+			print(res_labels)
+
 			break
 		else:
 			bottleneck_lists[already_get : temp_already_get] = adv_btlnks[mask]
@@ -98,7 +100,7 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 			res_labels[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_labels[mask]
 
 		already_get = temp_already_get
-		print('>>res_labels:', res_labels)
+		print(res_labels)
 
 	return bottleneck_lists, res_labels
 
@@ -250,7 +252,7 @@ if __name__ == '__main__':
 	parser.add_argument(
 			'--norm_output_tensor',
 			type=str,
-			default='softmax2_pre_activation：0',
+			default='softmax2_pre_activation:0',
 			help='name of normal model\'s output tensor.')
 	parser.add_argument(
 			'--bottleneck_tensor',
