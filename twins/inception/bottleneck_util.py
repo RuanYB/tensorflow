@@ -2,10 +2,35 @@
 """
 Bottleneck related helper functions.
 """
+import sys
+
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.platform import gfile
 import os.path
+
+def load_npy(ground_truth_dir, category, adv_or_not=True):
+  """
+  Args:
+  ground_truth_dir: String path to npy files holding label infos
+  category: Type string of bottleneck file(train, test or vali)
+  adv_or_not: Type boolean of whether retrieving adversarial labels or not
+  Returns:
+  Numpy array of labels of specific category
+  """
+  if adv_or_not:
+    bottleneck_type = 'adv'
+  else:
+    bottleneck_type = 'orin'
+  file_path = os.path.join(ground_truth_dir, '%s_%s_labels.npy' % (bottleneck_type, category))
+  try:
+    labels = np.load(file_path)
+  except IOError:
+    print('>>Error: file %s doesn\'t exists!' % file_path)
+    sys.exit(2)
+  # print('>>Retrieved %s labels from the cache stored in disk successfully!' % category)
+
+  return labels
 
 def get_image_path(image_lists, label_index, index, image_dir, category):
     """"Returns a path to an image for a label at the given index.

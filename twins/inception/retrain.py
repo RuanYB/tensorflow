@@ -1,7 +1,7 @@
 # encoding: utf-8
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+# from __future__ import absolute_import
+# from __future__ import division
+# from __future__ import print_function
 
 import argparse
 from datetime import datetime
@@ -21,8 +21,9 @@ from tensorflow.python.framework import graph_util
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.platform import gfile
 from tensorflow.python.util import compat
+from tensorflow.python import debug as tf_debug
 
-from bottleneck_util import get_image_path, get_bottleneck_path, run_bottleneck_on_image, create_bottleneck_file, get_or_create_bottleneck, cache_bottlenecks
+from bottleneck_util import get_bottleneck_path, load_npy
 
 FLAGS = None
 
@@ -44,30 +45,6 @@ def ensure_dir_exists(dir_name):
   """
   if not os.path.exists(dir_name):
     os.makedirs(dir_name)
-
-
-def load_npy(ground_truth_dir, category, adv_or_not=True):
-  """
-  Args:
-  ground_truth_dir: String path to npy files holding label infos
-  category: Type string of bottleneck file(train, test or vali)
-  adv_or_not: Type boolean of whether retrieving adversarial labels or not
-  Returns:
-  Numpy array of labels of specific category
-  """
-  if adv_or_not:
-    bottleneck_type = 'adv'
-  else:
-    bottleneck_type = 'orin'
-  file_path = os.path.join(ground_truth_dir, '%s_%s_labels.npy' % (bottleneck_type, category))
-  try:
-    labels = np.load(path_file)
-  except IOError:
-    print('>>Error: file %s does\'nt exists!' % file_path)
-    sys.exit(2)
-  print('>>Retrieved %s labels from the cache stored in disk successfully!' % category)
-
-  return labels
 
 
 # ============================ BOTTLENECK RELATED ============================
@@ -104,7 +81,7 @@ def create_bottleneck_lists(pert_dir, ground_truth_dir):
 def get_bottleneck(bottleneck_lists, label_index, bottleneck_index, bottleneck_dir, 
                       category, bottleneck_type):
   bottleneck_path = get_bottleneck_path(bottleneck_lists, label_index, bottleneck_index, 
-                                          FLAGS.bottleneck_dir, category, bottleneck_type)
+                                          bottleneck_dir, category, bottleneck_type)
   if not os.path.exists(bottleneck_path):
     print('>>Bottleneck file doesnt exist: %s!' % os.path.basename(bottleneck_path))
     return None
@@ -144,7 +121,7 @@ def get_random_cached_bottlenecks(bottleneck_lists, how_many, category, category
       bottleneck_index = random.randrange(bottleneck_lists[label_index][category])
       bottleneck_type = False if random.randrange(2)==0 else True # python中三元运算符的形式(0:norm, 1:adv)
       bottleneck, bottleneck_path = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
-                                              FLAGS.bottleneck_dir, category, bottleneck_type)
+                                              bottleneck_dir, category, bottleneck_type)
       if bottleneck:
         bottlenecks.append(bottleneck)
         # retrieve label saved in disk
@@ -153,7 +130,7 @@ def get_random_cached_bottlenecks(bottleneck_lists, how_many, category, category
         filenames.append(bottleneck_path)
         cnt += 1
 
-    print('>>Get random %d %s Bottlenecks and %d labels' % (len(bottlenecks), len(ground_truths)))
+    # print('>>Get random %d %s Bottlenecks and %d labels' % (len(bottlenecks), category, len(ground_truths)))
     if cnt != how_many:
       print('>>Get random %d %s Bottlenecks: Failure count add up to %d!' % (how_many, category, (how_many - cnt)))
   else:
@@ -163,9 +140,9 @@ def get_random_cached_bottlenecks(bottleneck_lists, how_many, category, category
       bottleneck_list = bottleneck_lists[label_index]
       for bottleneck_index in range(bottleneck_list[category]):
         adv_bottleneck, adv_bottleneck_path = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
-                                              FLAGS.bottleneck_dir, category, True)
+                                              bottleneck_dir, category, True)
         norm_bottleneck, norm_bottleneck_path = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
-                                      FLAGS.bottleneck_dir, category, False)
+                                              bottleneck_dir, category, False)
         cnt += 2
         if norm_bottleneck:
           bottlenecks.append(norm_bottleneck)
@@ -178,7 +155,7 @@ def get_random_cached_bottlenecks(bottleneck_lists, how_many, category, category
           ground_truths.append(ground_truth)
           filenames.append(adv_bottleneck_path)
 
-    print('>>Get random %d %s Bottlenecks and %d labels' % (len(bottlenecks), len(ground_truths)))
+    # print('>>Get random %d %s Bottlenecks and %d labels' % (len(bottlenecks), len(ground_truths)))
     if len(ground_truths) != cnt:
       print('>>Total Num: %d, Actual Num: %d' % (cnt, len(ground_truths)))
       print('>>Get All %s Bottlenecks: Failure count add up to %d!' % (category, (len(ground_truths) - cnt)))
@@ -205,6 +182,7 @@ def create_inception_graph():
   Returns:
     Graph holding the trained network, and various tensors we'll be manipulating.
   """
+  print('>>Creating graph...')
   with tf.Session() as sess:
     model_filename = os.path.join(
         FLAGS.model_dir, 'tensorflow_inception_graph.pb')
@@ -234,6 +212,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
     The tensors for the training and cross entropy results, and tensors for the
     bottleneck input and ground truth input.
   """
+  print('>>Adding final training ops...')
   with tf.name_scope('input'):
     bottleneck_input = tf.placeholder_with_default(
         bottleneck_tensor, shape=[None, BOTTLENECK_TENSOR_SIZE],
@@ -262,7 +241,8 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
 
   with tf.name_scope('cross_entropy'):
     cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=ground_truth_input, logits=logits)
+        labels=ground_truth_input, 
+        logits=logits)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
@@ -271,8 +251,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
     train_step = tf.train.GradientDescentOptimizer(FLAGS.learning_rate).minimize(
         cross_entropy_mean)
 
-  return train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
-          final_tensor
+  return train_step, cross_entropy_mean, bottleneck_input, ground_truth_input, final_tensor
 
 
 def add_evaluation_step(result_tensor, ground_truth_tensor):
@@ -284,15 +263,29 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   Returns:
     Tuple of (evaluation step, prediction).
   """
+  print('>>Adding evaluation steps...')
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
       prediction = tf.argmax(result_tensor, 1)
-      correct_prediction = tf.equal(
-          prediction, ground_truth_tensor)
+      correct_prediction = tf.equal(prediction, tf.cast(ground_truth_tensor, tf.int64))
     with tf.name_scope('accuracy'):
       evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
   tf.summary.scalar('accuracy', evaluation_step)
   return evaluation_step, prediction
+
+
+def save_model(sess, graph, step, save_labels=False):
+  # Write out the trained graph and labels with the weights stored as constants.
+  output_graph_def = graph_util.convert_variables_to_constants(
+      sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
+  output_graph_name = os.path.join(FLAGS.model_dir, 'retrain_%d_graph.pb' % step)
+  with gfile.FastGFile(output_graph_name, 'wb') as f:
+    f.write(output_graph_def.SerializeToString())
+
+  if save_labels:
+    output_labels = [x['dir'] for x in bottleneck_lists]
+    with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
+      f.write('\n'.join(output_labels) + '\n')
 
 
 def main(_):
@@ -311,9 +304,13 @@ def main(_):
 
   sess = tf.Session()
 
+  # type order ‘run -f has_inf_or_nan’ in commandline to launch the hook
+  sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+  sess.add_tensor_filter('has_inf_or_nan', tf_debug.has_inf_or_nan)
+
   # Add the new layer that we'll be training.
-  train_step, cross_entropy, bottleneck_input, ground_truth_input,
-     final_tensor = add_final_training_ops(class_count,
+  train_step, cross_entropy, bottleneck_input, ground_truth_input, final_tensor = add_final_training_ops(
+                                            1008,
                                             FLAGS.final_tensor_name,
                                             bottleneck_tensor)
 
@@ -334,12 +331,13 @@ def main(_):
   # retrieve category labels from the cache stored on disk
   train_labels = load_npy(FLAGS.ground_truth_dir, 'train', True)
   vali_labels = load_npy(FLAGS.ground_truth_dir, 'vali', True)
+
   # Run the training for as many cycles as requested on the command line.
   for i in range(FLAGS.how_many_training_steps):
     # Get a batch of input bottleneck values from the cache stored on disk.
     train_bottlenecks, train_ground_truth, _ = get_random_cached_bottlenecks(
         bottleneck_lists, FLAGS.train_batch_size, 'train', train_labels,
-        FLAGS.bottleneck_dir)
+        FLAGS.bottleneck_path)
 
     # Feed the bottlenecks and ground truth into the graph, and run a training
     # step. Capture training summaries for TensorBoard with the`merged`op.
@@ -347,6 +345,9 @@ def main(_):
              feed_dict={bottleneck_input: train_bottlenecks,
                         ground_truth_input: train_ground_truth})
     train_writer.add_summary(train_summary, i)
+
+    if (i % FLAGS.save_model_interval == 0) and (i + 1 >= 4000):
+      save_model(sess, sess.graph, i, save_labels=False)
 
     # Every so often, print out how well the graph is training.
     is_last_step = (i + 1 == FLAGS.how_many_training_steps)
@@ -361,7 +362,7 @@ def main(_):
                                                  cross_entropy_value))
       vali_bottlenecks, vali_ground_truth, _ = get_random_cached_bottlenecks(
               bottleneck_lists, FLAGS.validation_batch_size, 'vali', vali_labels,
-              FLAGS.bottleneck_dir)
+              FLAGS.bottleneck_path)
       # Run a validation step anddata/bottleneckng summaries for TensorBoard
       # with the `merged` op.
       validation_summary, validation_accuracy = sess.run(
@@ -377,7 +378,7 @@ def main(_):
   # some new images we haven't used before.
   test_bottlenecks, test_ground_truth, test_filenames = (
       get_random_cached_bottlenecks(bottleneck_lists, FLAGS.test_batch_size,
-                                    'test', FLAGS.bottleneck_dir))
+                                    'test', FLAGS.bottleneck_path))
   test_accuracy, predictions = sess.run(
       [evaluation_step, prediction],
       feed_dict={bottleneck_input: test_bottlenecks,
@@ -393,13 +394,14 @@ def main(_):
   #                           list(image_lists.keys())[predictions[i]]))
 
   # Write out the trained graph and labels with the weights stored as constants.
-  output_graph_def = graph_util.convert_variables_to_constants(
-      sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
-  with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
-    f.write(output_graph_def.SerializeToString())
-  output_labels = [x['dir'] for x in bottleneck_lists]
-  with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
-    f.write('\n'.join(output_labels) + '\n')
+  # output_graph_def = graph_util.convert_variables_to_constants(
+  #     sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
+  # with gfile.FastGFile(FLAGS.output_graph, 'wb') as f:
+  #   f.write(output_graph_def.SerializeToString())
+  # output_labels = [x['dir'] for x in bottleneck_lists]
+  # with gfile.FastGFile(FLAGS.output_labels, 'w') as f:
+  #   f.write('\n'.join(output_labels) + '\n')
+  save_model(sess, sess.graph, FLAGS.how_many_training_steps, save_labels=True)  
 
 
 if __name__ == '__main__':
@@ -423,7 +425,7 @@ if __name__ == '__main__':
       help='Path to ground truth files.'
   )
   parser.add_argument(
-      '--bottleneck_dir',
+      '--bottleneck_path',
       type=str,
       default='data/bottleneck',
       help='Path to ground truth files.'
@@ -458,23 +460,17 @@ if __name__ == '__main__':
       default=0.01,
       help='How large a learning rate to use when training.'
   )
-  # parser.add_argument(
-  #     '--testing_percentage',
-  #     type=int,
-  #     default=10,
-  #     help='What percentage of images to use as a test set.'
-  # )
-  # parser.add_argument(
-  #     '--validation_percentage',
-  #     type=int,
-  #     default=10,
-  #     help='What percentage of images to use as a validation set.'
-  # )
   parser.add_argument(
       '--eval_step_interval',
       type=int,
       default=10,
       help='How often to evaluate the training results.'
+  )
+  parser.add_argument(
+      '--save_model_interval',
+      type=int,
+      default=1000,
+      help='How often to save the graph as pb file.'
   )
   parser.add_argument(
       '--train_batch_size',
@@ -506,14 +502,14 @@ if __name__ == '__main__':
       training sets.\
       """
   )
-  parser.add_argument(
-      '--print_misclassified_test_images',
-      default=False,
-      help="""\
-      Whether to print out a list of all misclassified test images.\
-      """,
-      action='store_true'
-  )
+  # parser.add_argument(
+  #     '--print_misclassified_test_images',
+  #     default=False,
+  #     help="""\
+  #     Whether to print out a list of all misclassified test images.\
+  #     """,
+  #     action='store_true'
+  # )
   parser.add_argument(
       '--model_dir',
       type=str,
