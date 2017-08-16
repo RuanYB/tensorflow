@@ -90,7 +90,7 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 			res_labels[already_get : half_how_many] = adv_labels[mask][:temp_cnt]
 			res_labels[(already_get+half_how_many) : how_many] = orin_labels[mask][:temp_cnt]
 
-			print(res_labels)
+			print(res_labels.shape)
 
 			break
 		else:
@@ -100,7 +100,7 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 			res_labels[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_labels[mask]
 
 		already_get = temp_already_get
-		print(res_labels)
+		# print(res_labels)
 
 	return bottleneck_lists, res_labels
 
@@ -161,7 +161,7 @@ def main(_):
 		adv_labels = get_saved_labels(FLAGS.ground_truth_dir, 'test', True, rows, offset) 
 		norm_labels = get_saved_labels(FLAGS.ground_truth_dir, 'test', False, rows, offset) 
 		test_good_labels = np.concatenate((adv_labels, norm_labels))
-		# print(test_good_labels)
+		print('good labels shape: ', test_good_labels.shape)
 
 		# 同干扰测试：bad bro输入瓶颈值（normal：5000 + adversarial:5000）
 		bottleneck_lists = [x[2] for x in os.walk(FLAGS.bottleneck_dir)][0]
@@ -187,7 +187,8 @@ def main(_):
 
 	# ============================= BAD BRO PART ================================
 	with tf.Graph().as_default():
-		test_bad_labels = np.zeros((FLAGS.dataset_size,), dtype=np.int)
+		# test_bad_labels = np.zeros((FLAGS.dataset_size,), dtype=np.int)
+		test_bad_labels_2 = np.zeros((FLAGS.dataset_size, FLAGS.magic_num), dtype=np.int)
 
 		# load bad bro model graph
 		adv_graph, (adv_bottleneck, adv_output) = create_graph(
@@ -202,16 +203,32 @@ def main(_):
 				end = min((i+1)*FLAGS.batch_size, FLAGS.dataset_size)
 				logits = run_bottleneck_on_image(sess, test_bottlenecks[start:end], 
 													adv_bottleneck, adv_output)
-				test_bad_labels[start:end] = np.argmax(logits, axis=1)
-			# print(test_bad_labels)
+				# test_bad_labels[start:end] = np.argmax(logits, axis=1)
+				test_bad_labels_2[start:end] = np.argsort(-logits, axis=1)[:, :FLAGS.magic_num]
+
+			print('bad labels shape: ', test_bad_labels_2.shape)
 
 
 	# ============================= FUSE INFO PART ================================
-	adv_result = np.sum(test_good_labels[:half_dataset_size] == test_bad_labels[:half_dataset_size])
-	norm_result = np.sum(test_good_labels[half_dataset_size:] != test_bad_labels[:half_dataset_size])
-	total_accuracy = float(adv_result + norm_result) / float(FLAGS.dataset_size)
-	adv_accuracy = float(adv_result) / float(half_dataset_size)
-	norm_accuracy = float(norm_result) / float(half_dataset_size)
+	# adv_result = np.sum(test_good_labels[:half_dataset_size] == test_bad_labels[:half_dataset_size])
+	# norm_result = np.sum(test_good_labels[half_dataset_size:] != test_bad_labels[:half_dataset_size])
+	adv_cnt = 0
+	for i in range(half_dataset_size):
+		if test_good_labels[:half_dataset_size][i] in test_bad_labels_2[:half_dataset_size][i]:
+			adv_cnt += 1
+	adv_accuracy = float(adv_cnt) / float(half_dataset_size)
+
+	norm_cnt = 0
+	for i in range(half_dataset_size):
+		if test_good_labels[half_dataset_size:][i] in test_bad_labels_2[half_dataset_size:][i]:
+			norm_cnt += 1
+	adv_accuracy = float(adv_cnt) / float(half_dataset_size)
+	norm_accuracy = float(half_dataset_size - norm_cnt) / float(half_dataset_size)
+	total_accuracy = float(adv_cnt + half_dataset_size - norm_cnt) / float(FLAGS.dataset_size)
+
+	# total_accuracy = float(adv_result + norm_result) / float(FLAGS.dataset_size)
+	# adv_accuracy = float(adv_result) / float(half_dataset_size)
+	# norm_accuracy = float(norm_result) / float(half_dataset_size)
 
 	print('|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|')
 	print('|++++++++++++++++++++++++ TEST  RESULT ++++++++++++++++++++++++++|')
@@ -294,6 +311,11 @@ if __name__ == '__main__':
 			type=int,
 			default=10000,
 			help='size of total testing set, must be even.')
+	parser.add_argument(
+			'--magic_num',
+			type=int,
+			default=1,
+			help='')
 
 	FLAGS, unparsed = parser.parse_known_args()
 
