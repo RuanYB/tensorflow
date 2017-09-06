@@ -115,20 +115,27 @@ def get_random_cached_bottlenecks(bottleneck_lists, how_many, category, category
   if how_many >= 0:
     cnt = 0
     # Retrieve a random sample of bottlenecks.
-    for _ in range(how_many):
+    for _ in range(int(how_many/2)):
       label_index = random.randrange(class_count) # randrange返回指定范围内的一个随机数
       # label_name = bottleneck_lists[label_index]['dir']
       bottleneck_index = random.randrange(bottleneck_lists[label_index][category])
-      bottleneck_type = False if random.randrange(2)==0 else True # python中三元运算符的形式(0:norm, 1:adv)
-      bottleneck, bottleneck_path = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
-                                              bottleneck_dir, category, bottleneck_type)
-      if bottleneck:
-        bottlenecks.append(bottleneck)
+      # bottleneck_type = False if random.randrange(2)==0 else True # python中三元运算符的形式(0:norm, 1:adv)
+      # bottleneck, bottleneck_path = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
+      #                                         bottleneck_dir, category, bottleneck_type)
+      bottleneck_1, bottleneck_path_1 = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
+                                        bottleneck_dir, category, True)
+      bottleneck_2, bottleneck_path_2 = get_bottleneck(bottleneck_lists, label_index, bottleneck_index, 
+                                        bottleneck_dir, category, False)
+      if bottleneck_1 and bottleneck_2:
+        bottlenecks.append(bottleneck_1)
+        bottlenecks.append(bottleneck_2)
         # retrieve label saved in disk
         ground_truth = category_labels[label_index][bottleneck_index+1]
         ground_truths.append(ground_truth)
-        filenames.append(bottleneck_path)
-        cnt += 1
+        ground_truths.append(ground_truth)
+        filenames.append(bottleneck_path_1)
+        filenames.append(bottleneck_path_2)
+        cnt += 2
 
     # print('>>Get random %d %s Bottlenecks and %d labels' % (len(bottlenecks), category, len(ground_truths)))
     if cnt != how_many:
@@ -218,9 +225,7 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor):
         bottleneck_tensor, shape=[None, BOTTLENECK_TENSOR_SIZE],
         name='BottleneckInput')
 
-    ground_truth_input = tf.placeholder(tf.int32,
-                                        [None],
-                                        name='GroundTruthInput')
+    ground_truth_input = tf.placeholder(tf.int64, [None], name='GroundTruthInput')
 
   # Organizing the following ops as `final_training_ops` so they're easier
   # to see in TensorBoard
@@ -278,7 +283,7 @@ def save_model(sess, graph, step, save_labels=False):
   # Write out the trained graph and labels with the weights stored as constants.
   output_graph_def = graph_util.convert_variables_to_constants(
       sess, graph.as_graph_def(), [FLAGS.final_tensor_name])
-  output_graph_name = os.path.join(FLAGS.model_dir, 'retrain_%d_graph.pb' % step)
+  output_graph_name = os.path.join(FLAGS.model_dir, 're_retrain_%d_graph.pb' % step)
   with gfile.FastGFile(output_graph_name, 'wb') as f:
     f.write(output_graph_def.SerializeToString())
 
@@ -305,8 +310,8 @@ def main(_):
   sess = tf.Session()
 
   # type order ‘run -f has_inf_or_nan’ in commandline to launch the hook
-  sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-  sess.add_tensor_filter('has_inf_or_nan', tf_debug.has_inf_or_nan)
+  # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+  # sess.add_tensor_filter('has_inf_or_nan', tf_debug.has_inf_or_nan)
 
   # Add the new layer that we'll be training.
   train_step, cross_entropy, bottleneck_input, ground_truth_input, final_tensor = add_final_training_ops(
@@ -346,7 +351,7 @@ def main(_):
                         ground_truth_input: train_ground_truth})
     train_writer.add_summary(train_summary, i)
 
-    if (i % FLAGS.save_model_interval == 0) and (i + 1 >= 4000):
+    if (i % FLAGS.save_model_interval == 0) and (i + 1 >= 3500):
       save_model(sess, sess.graph, i, save_labels=False)
 
     # Every so often, print out how well the graph is training.
@@ -457,7 +462,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--learning_rate',
       type=float,
-      default=0.01,
+      default=0.001,
       help='How large a learning rate to use when training.'
   )
   parser.add_argument(
@@ -469,7 +474,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--save_model_interval',
       type=int,
-      default=1000,
+      default=500,
       help='How often to save the graph as pb file.'
   )
   parser.add_argument(
