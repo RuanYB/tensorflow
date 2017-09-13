@@ -62,20 +62,10 @@ if __name__ == '__main__':
 		default='tensorflow_inception_graph.pb',
 		help='name of graph about to load.')
 	parser.add_argument(
-		'--path_eigenvec',
+		'--path_pca',
 		type=str,
-		default='data/pca/eigen_vectors.npy',
-		help='Path to cache file which stored pre-computed eigenvectors.')
-	parser.add_argument(
-		'--path_eigenval',
-		type=str,
-		default='data/pca/eigen_values.npy',
-		help='Path to cache file which stored pre-computed eigenvalues.')
-	parser.add_argument(
-		'--path_fc_vals',
-		type=str,
-		default='data/pca/fc_values.npy',
-		help='Path to cache file which stored pre-computed full-connect layer values.')
+		default='data/pca',
+		help='Path to cache file which stored pre-computed eigenvectors, eigenvalues n fc_values.')
 	parser.add_argument(
 		'--batch_size',
 		type=int,
@@ -96,10 +86,14 @@ if __name__ == '__main__':
 	if len(FLAGS.num_eigen) != 2:
 		raise ValueError('!!Error: must offer only 2 eigenvector order number.')
 	print('++ order number of eigenvectors about to project: ', FLAGS.num_eigen)
+	dataset_type = os.path.basename(FLAGS.path_bltnk)
+	path_eigenvec = os.path.join(FLAGS.path_pca, '%s_eigen_vectors.npy' % dataset_type)
+	path_eigenval = os.path.join(FLAGS.path_pca, '%s_eigen_values.npy' % dataset_type)
+	path_fc_vals = os.path.join(FLAGS.path_pca, '%s_fc_values.npy' % dataset_type)
 	return_elements = [BOTTLENECK_TENSOR_NAME, ORIN_FC_TENSOR_NAME] if FLAGS.graph_name == 'tensorflow_inception_graph.pb' else [BOTTLENECK_TENSOR_NAME, SHADOW_FC_TENSOR_NAME]
 
 
-	if (not os.path.exists(FLAGS.path_eigenvec)) or (not os.path.exists(FLAGS.path_eigenval)) or (not os.path.exists(FLAGS.path_fc_vals)): 
+	if (not os.path.exists(path_eigenvec)) or (not os.path.exists(path_eigenval)) or (not os.path.exists(path_fc_vals)): 
 		# load validation bottleneck values: sum up 50000
 		bltnk_filenames = [x[2] for x in os.walk(FLAGS.path_bltnk)][0]
 		bltnk_values = np.zeros((len(bltnk_filenames), BOTTLENECK_TENSOR_SIZE), dtype=np.float32)
@@ -110,7 +104,7 @@ if __name__ == '__main__':
 				bltnk_value = [float(x) for x in bltnk_string.split(',')]
 			bltnk_values[i] = bltnk_value
 			if i+1==50000:
-				print('>>Validation set processing complete!')
+				print('>>Dataset processing complete!')
 
 
 		# load original inception model
@@ -121,6 +115,7 @@ if __name__ == '__main__':
 
 		# remove the mean
 		sc = StandardScaler(copy=False, with_std=False)
+		# sc = StandardScaler(copy=False)
 		fc_values = sc.fit_transform(fc_values)
 
 		# compute covariance matrix
@@ -139,24 +134,25 @@ if __name__ == '__main__':
 		eigen_vecs = eigen_vecs[:, eigen_mask]
 
 		# store the pre-computed eigenvectors and eigenvalues
-		np.save(FLAGS.path_eigenvec, eigen_vecs)
-		np.save(FLAGS.path_eigenval, eigen_vals)
-		np.save(FLAGS.path_fc_vals, fc_values)
+		np.save(path_eigenvec, eigen_vecs)
+		np.save(path_eigenval, eigen_vals)
+		np.save(path_fc_vals, fc_values)
 	else:
-		eigen_vals =  np.load(FLAGS.path_eigenval)
-		eigen_vecs = np.load(FLAGS.path_eigenvec)
-		fc_values = np.load(FLAGS.path_fc_vals)
+		eigen_vals =  np.load(path_eigenval)
+		eigen_vecs = np.load(path_eigenvec)
+		fc_values = np.load(path_fc_vals)
 	print('++ Eigen_val shape: ', eigen_vals.shape)
-	print('++Eigen_vecs shape: ', eigen_vecs.shape)
-	print('FOR DEBUG -- eigen values', eigen_vals)
+	print('++ Eigen_vecs shape: ', eigen_vecs.shape)
+	# print('FOR DEBUG -- eigen values', eigen_vals)
 	
 	if FLAGS.ver:
 		# plot eigenvalue distribution
 		total = sum(eigen_vals)
 		var_exp = [(i / total) for i in eigen_vals]
-		num_bar = int(len(eigen_vals) * 0.02)
+		# num_bar = int(len(eigen_vals) * 0.02)
+		num_bar = 20
 		# 方差解释率 (variance explained ratios) 
-		plt.bar(range(num_bar), var_exp[:num_bar], width=0.8, bottom=0.0, label='individual explained variance')
+		plt.bar(range(num_bar), var_exp[:num_bar], width=1.0, bottom=0.0, alpha=0.5, label='individual explained variance')
 		plt.ylabel('Explained variance ratio')
 		plt.xlabel('Principal components')
 		plt.legend(loc='best')
@@ -175,7 +171,11 @@ if __name__ == '__main__':
 	colors = ['b', 'r']
 	markers = ['o','x']
 	dataset_mask = [1, 0]
-	for l, c , m in zip(dataset_mask, colors, markers):
+	# colors = ['b']
+	# markers = ['o']
+	# dataset_mask = [1]
+	for l, c, m in zip(dataset_mask, colors, markers):
+		# print('---------%d to %d-------------' % (l*batch_fc_vals, (l+1)*batch_fc_vals))
 		plt.scatter(fc_values_pca[l*batch_fc_vals : (l+1)*batch_fc_vals, 0], 
 					fc_values_pca[l*batch_fc_vals : (l+1)*batch_fc_vals, 1], 
 					c=c, 
