@@ -4,7 +4,7 @@ import os
 import argparse
 
 import tensorflow as tf
-import numpy as np
+import numpy as np 
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 

@@ -8,6 +8,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.platform import gfile
 import os.path
+import matplotlib.pyplot as plt
 
 def load_npy(ground_truth_dir, category, adv_or_not=True):
   """
@@ -90,12 +91,12 @@ def get_bottleneck_path(image_lists, label_index, index, bottleneck_dir, categor
     return os.path.join(bottleneck_dir, category, '%s_%s_%d.txt' % (bottleneck_type, label_name, index))
 
 
-def run_bottleneck_on_image(sess, image_data, input_tensor, bottleneck_tensor):
+def run_bottleneck_on_image(sess, input_data, input_tensor, bottleneck_tensor):
     """Runs inference on an image to extract the 'bottleneck' summary layer.
     Returns:
         Numpy array of bottleneck values.
     """
-    bottleneck_values = sess.run(bottleneck_tensor, feed_dict={input_tensor : image_data})
+    bottleneck_values = sess.run(bottleneck_tensor, feed_dict={input_tensor : input_data})
     return np.squeeze(bottleneck_values)
 
 
@@ -190,4 +191,25 @@ def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, input_tensor
 
                 how_many_bottlenecks += 1
             print('>>Folder %s: %d %s bottleneck files has been created!!' % 
-                    (label_lists['dir'], how_many_bottlenecks, category))
+                        (label_lists['dir'], how_many_bottlenecks, category))
+
+
+def jsd_analyze(jsd_list):
+    # former half part  of jsd_list are adversarial js divergence
+    # latter half part are normal ones
+    half_size = int(jsd_list.shape[0]/2)
+    x_axis = np.array(range(half_size), dtype=np.int)
+    print('++ jsd_analyze -- x_axis length:', len(x_axis))
+    colors = ['b', 'r']
+    marker = ['o', 'x']
+    list_mask = [1, 0]
+    for l, c, m in zip(list_mask, colors, marker):
+        plt.scatter(x_axis, 
+                    jsd_list[l*half_size : (l+1)*half_size],
+                    c=c,
+                    label='normal' if l == 1 else 'adversarial',
+                    marker=m)
+    plt.xlabel('Dimension')
+    plt.ylabel('JS Divergence')
+    plt.legend(loc='best')
+    plt.show()

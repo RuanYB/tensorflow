@@ -8,6 +8,9 @@ import os
 import sys
 import argparse
 
+from math import log
+from math import sqrt
+
 import tensorflow as tf
 import numpy as np
 
@@ -16,6 +19,9 @@ from prepare_imagenet_data import preprocess_image_batch
 
 FLAGS = None
 BOTTLENECK_TENSOR_SIZE = 1024
+OUTPUT_TENSOR_SIZE = 1008
+GOOD_SOFTMAX_TENSOR = 'softmax2:0'
+BAD_SOFTMAX_TENSOR = 'final_result:0'
 
 
 def get_saved_labels(path_ground_truth, category, adv_or_not, rows, offset=0):
@@ -38,20 +44,23 @@ def undo_image_avg(img):
 
 
 # ===========================================待测试=========================================
-def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottleneck_tensor, output_tensor):
+def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottleneck_tensor, output_tensor, softmax_tensor, eval_type, T):
 	"""
 	Pick out valid sample which can be perturbed successfully with the pert.
 	***Design for CROSS universal perturbation test***.
 	Returns:
-	res_labels: Array int containing normal label part and adversarial label part
+	res: Array int containing normal label part and adversarial label part
 	bottleneck_lists: Array float64 containing normal bottleneck part 
-		and adversarial bottleneck part.
+		and adversarial bottleneck part(前一半adversarial部分，后一半为original部分).
 	"""
 	half_how_many = int(np.ceil(how_many / 2))
 	print('>>PICK PERT: need to pick out %d valid sample...' % half_how_many)
 
 	bottleneck_lists = np.zeros((how_many, BOTTLENECK_TENSOR_SIZE), dtype=np.float)
-	res_labels = np.zeros((how_many,), dtype=np.int)
+	if eval_type == 'top':
+		res = np.zeros((how_many,), dtype=np.int)
+	elif eval_type == 'jsd' or eval_type == 'cos':
+		res = np.zeros((how_many, OUTPUT_TENSOR_SIZE), dtype=np.float)
 
 	already_get = 0 # 记录成功采集的对抗样本数
 	path_test_set = os.path.join(path_imagenet, 'test')
@@ -87,22 +96,56 @@ def pick_btlnk_label(sess, path_imagenet, pert, how_many, input_tensor, bottlene
 
 			bottleneck_lists[already_get : half_how_many] = adv_btlnks[mask][:temp_cnt]
 			bottleneck_lists[(already_get+half_how_many) : how_many] = orin_btlnks[mask][:temp_cnt]
-			res_labels[already_get : half_how_many] = adv_labels[mask][:temp_cnt]
-			res_labels[(already_get+half_how_many) : how_many] = orin_labels[mask][:temp_cnt]
-
-			print(res_labels.shape)
+			if eval_type == 'top':
+				res[already_get : half_how_many] = adv_labels[mask][:temp_cnt]
+				res[(already_get+half_how_many) : how_many] = orin_labels[mask][:temp_cnt]
+			elif eval_type == 'jsd':
+				# jsd评估需要的是softmax值，softmax层还能放大激活值的分布差异
+				# 不过需要scale参数T防止饱和
+				res[already_get : half_how_many] = run_bottleneck_on_image(
+														sess, 
+														(adv_logits[mask][:temp_cnt] / T), 
+														output_tensor, 
+														softmax_tensor)
+				res[(already_get+half_how_many) : how_many] = run_bottleneck_on_image(
+														sess, 
+														(orin_logits[mask][:temp_cnt] / T), 
+														output_tensor, 
+														softmax_tensor)
+			elif eval_type == 'cos':
+				res[already_get : half_how_many] = adv_logits[mask][:temp_cnt]
+				res[(already_get+half_how_many) : how_many] = orin_logits[mask][:temp_cnt]
+			else:
+				print('++ Warning!! Please choose a evaluation type: top or jsd.')
+			print('++ pick_bltnk_label--res shape: ', res.shape)
 
 			break
 		else:
 			bottleneck_lists[already_get : temp_already_get] = adv_btlnks[mask]
 			bottleneck_lists[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_btlnks[mask]
-			res_labels[already_get : temp_already_get] = adv_labels[mask]
-			res_labels[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_labels[mask]
-
+			if eval_type == 'top':
+				res[already_get : temp_already_get] = adv_labels[mask]
+				res[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_labels[mask]
+			elif eval_type == 'jsd':
+				res[already_get : temp_already_get] = run_bottleneck_on_image(
+														sess,
+														(adv_logits[mask] / T),
+														output_tensor, 
+														softmax_tensor)
+				res[(already_get+half_how_many) : (temp_already_get+half_how_many)] = run_bottleneck_on_image(
+														sess,
+														(orin_logits[mask] / T),
+														output_tensor, 
+														softmax_tensor)
+			elif eval_type == 'cos':
+				res[already_get : temp_already_get] = adv_logits[mask]
+				res[(already_get+half_how_many) : (temp_already_get+half_how_many)] = orin_logits[mask]
+			else:
+				print('++ Warning!! Please choose a evaluation type: top or jsd.')
 		already_get = temp_already_get
-		# print(res_labels)
+	print('++ pick res shape: ', res.shape)
 
-	return bottleneck_lists, res_labels
+	return bottleneck_lists, res
 
 
 def get_bottleneck_values(btlnk_filenames):
@@ -140,6 +183,36 @@ def create_graph(graph_dir, graph_name, return_elements):
 	return sess.graph, tf.import_graph_def(graph_def, name='', return_elements=return_elements)
 
 
+# ============================= JSD EVALUATION PART ================================
+def KLD(p, q):
+	return sum([_p * log(_p,2) - _p * log(_q,2) for (_p, _q) in zip(p,q)])
+
+
+def JSD_core(p, q):
+	mask = np.ones((p.shape[0],), dtype=np.int)
+	# p, q = zip(filter(lambda x : x[0]!=0 or x[1]!=0, [(_p, _q) for _p,_q in zip(p,q)])) # 去掉p，q中同时为0的元素
+	i = 0
+	for _p, _q in zip(p, q):
+		if _p == 0 and _q == 0:
+			mask[i] = 0
+		i += 1
+	p = p[mask]
+	q = q[mask] 
+
+	M = [0.5 * (_p + _q) for _p,_q in zip(p,q)]
+	p += np.spacing(1)
+	q += np.spacing(1)
+	M += np.spacing(1)
+
+	return 0.5 * KLD(p, M) + 0.5 * KLD(q, M)
+
+
+def Cosine(vec1, vec2):
+	# 用余弦夹角衡量样本间差异
+    return vec1.dot(vec2)/(sqrt((vec1**2).sum()) * sqrt((vec2**2).sum()))
+
+
+# ============================= MAIN PART ================================
 def main(_):
 	# ============================= GOOD BRO PART ================================
 	if FLAGS.dataset_size % 2 != 0:
@@ -172,29 +245,33 @@ def main(_):
 		test_bottlenecks = get_bottleneck_values(btlnk_filenames)
 
 	elif FLAGS.test_type == 'CROSS':
+		# for different perturbation cross test:
 		pert = np.load(FLAGS.pert_path)
 		# for CROSS perturbation test: 
 		# load the graph , pick out valid bottlenecks and labels from scratch. 
-		norm_graph, (norm_input, norm_bottleneck, norm_output) = create_graph(
+		norm_graph, (norm_input, norm_bottleneck, norm_output, norm_softmax) = create_graph(
 					FLAGS.graph_dir, 
 					FLAGS.norm_graph_name, 
-					[FLAGS.input_tensor, FLAGS.bottleneck_tensor, FLAGS.norm_output_tensor])
+					[FLAGS.input_tensor, FLAGS.bottleneck_tensor, FLAGS.norm_output_tensor, GOOD_SOFTMAX_TENSOR])
 
 		with tf.Session() as sess:
 			test_bottlenecks, test_good_labels = pick_btlnk_label(sess, FLAGS.imagenet_dir, pert, FLAGS.dataset_size, 
-						norm_input, norm_bottleneck, norm_output)
+						norm_input, norm_bottleneck, norm_output, norm_softmax, FLAGS.eval_type, FLAGS.T)
 
 
 	# ============================= BAD BRO PART ================================
 	with tf.Graph().as_default():
 		# test_bad_labels = np.zeros((FLAGS.dataset_size,), dtype=np.int)
-		test_bad_labels_2 = np.zeros((FLAGS.dataset_size, FLAGS.magic_num), dtype=np.int)
+		if FLAGS.eval_type == 'top':
+			test_bad_labels_2 = np.zeros((FLAGS.dataset_size, FLAGS.magic_num), dtype=np.int)
+		elif FLAGS.eval_type == 'jsd' or FLAGS.eval_type == 'cos':
+			test_bad_logits_2 = np.zeros((FLAGS.dataset_size, OUTPUT_TENSOR_SIZE), dtype=np.float)
 
 		# load bad bro model graph
-		adv_graph, (adv_bottleneck, adv_output) = create_graph(
+		adv_graph, (adv_bottleneck, adv_output, adv_softmax) = create_graph(
 					FLAGS.graph_dir, 
 					FLAGS.adv_graph_name, 
-					[FLAGS.bottleneck_tensor, FLAGS.adv_output_tensor])
+					[FLAGS.bottleneck_tensor, FLAGS.adv_output_tensor, BAD_SOFTMAX_TENSOR])
 		num_batches = np.int(np.ceil(FLAGS.dataset_size / FLAGS.batch_size))
 
 		with tf.Session() as sess:
@@ -203,39 +280,67 @@ def main(_):
 				end = min((i+1)*FLAGS.batch_size, FLAGS.dataset_size)
 				logits = run_bottleneck_on_image(sess, test_bottlenecks[start:end], 
 													adv_bottleneck, adv_output)
-				# test_bad_labels[start:end] = np.argmax(logits, axis=1)
-				test_bad_labels_2[start:end] = np.argsort(-logits, axis=1)[:, :FLAGS.magic_num]
-
-			print('bad labels shape: ', test_bad_labels_2.shape)
+				if FLAGS.eval_type == 'jsd':
+					test_bad_logits_2[start:end] = run_bottleneck_on_image(
+														sess, 
+														(logits/FLAGS.T),
+														adv_output,
+														adv_softmax) 
+				elif FLAGS.eval_type == 'cos':
+					test_bad_logits_2[start:end] = logits
+				elif FLAGS.eval_type == 'top':
+					# test_bad_labels[start:end] = np.argmax(logits, axis=1)
+					test_bad_labels_2[start:end] = np.argsort(-logits, axis=1)[:, :FLAGS.magic_num]
 
 
 	# ============================= FUSE INFO PART ================================
 	# adv_result = np.sum(test_good_labels[:half_dataset_size] == test_bad_labels[:half_dataset_size])
 	# norm_result = np.sum(test_good_labels[half_dataset_size:] != test_bad_labels[:half_dataset_size])
-	adv_cnt = 0
-	for i in range(half_dataset_size):
-		if test_good_labels[:half_dataset_size][i] in test_bad_labels_2[:half_dataset_size][i]:
-			adv_cnt += 1
-	adv_accuracy = float(adv_cnt) / float(half_dataset_size)
+	if FLAGS.eval_type == 'top':
+		# adversarial part
+		adv_cnt = 0
+		for i in range(half_dataset_size):
+			if test_good_labels[:half_dataset_size][i] in test_bad_labels_2[:half_dataset_size][i]:
+				adv_cnt += 1
+		adv_accuracy = float(adv_cnt) / float(half_dataset_size)
 
-	norm_cnt = 0
-	for i in range(half_dataset_size):
-		if test_good_labels[half_dataset_size:][i] in test_bad_labels_2[half_dataset_size:][i]:
-			norm_cnt += 1
-	adv_accuracy = float(adv_cnt) / float(half_dataset_size)
-	norm_accuracy = float(half_dataset_size - norm_cnt) / float(half_dataset_size)
-	total_accuracy = float(adv_cnt + half_dataset_size - norm_cnt) / float(FLAGS.dataset_size)
+		# normal part
+		norm_cnt = 0
+		for i in range(half_dataset_size):
+			if test_good_labels[half_dataset_size:][i] in test_bad_labels_2[half_dataset_size:][i]:
+				norm_cnt += 1
+		adv_accuracy = float(adv_cnt) / float(half_dataset_size)
+		norm_accuracy = float(half_dataset_size - norm_cnt) / float(half_dataset_size)
+		total_accuracy = float(adv_cnt + half_dataset_size - norm_cnt) / float(FLAGS.dataset_size)
 
-	# total_accuracy = float(adv_result + norm_result) / float(FLAGS.dataset_size)
-	# adv_accuracy = float(adv_result) / float(half_dataset_size)
-	# norm_accuracy = float(norm_result) / float(half_dataset_size)
+		# total_accuracy = float(adv_result + norm_result) / float(FLAGS.dataset_size)
+		# adv_accuracy = float(adv_result) / float(half_dataset_size)
+		# norm_accuracy = float(norm_result) / float(half_dataset_size)
 
-	print('|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|')
-	print('|++++++++++++++++++++++++ TEST  RESULT ++++++++++++++++++++++++++|')
-	print('|++ TYPE: %s BAD BRO MODEL: %s ++|' % (FLAGS.test_type, FLAGS.adv_graph_name))
-	print('|++ TOTAL ACCURACY: %d%%, ADV ACCURACY: %d%%, NORM ACCURACY: %d%% ++|' % 
-				(total_accuracy*100, adv_accuracy*100, norm_accuracy*100))
-	print('|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|')
+		print('|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|')
+		print('|++++++++++++++++++++++++ TEST  RESULT ++++++++++++++++++++++++++|')
+		print('|++ TYPE: %s BAD BRO MODEL: %s ++|' % (FLAGS.test_type, FLAGS.adv_graph_name))
+		print('|++ TOTAL ACCURACY: %d%%, ADV ACCURACY: %d%%, NORM ACCURACY: %d%% ++|' % 
+					(total_accuracy*100, adv_accuracy*100, norm_accuracy*100))
+		print('|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|')
+	elif FLAGS.eval_type == 'jsd':
+		jsd_list = np.zeros((FLAGS.dataset_size,), dtype=np.float)
+		# JS Divergence
+		for i in range(FLAGS.dataset_size):
+			# 历史遗留问题，eval_type为jsd时，test_good_lables保存的是倒数第二层激活值向量
+			jsd_val = JSD_core(test_good_labels[i], test_bad_logits_2[i])
+			# print('jsd value: ', jsd_val)
+			jsd_list[i] = jsd_val
+		# print(jsd_list)
+		np.save('data/pca/jsd_val.npy', jsd_list)
+	elif FLAGS.eval_type == 'cos':
+		cos_list = np.zeros((FLAGS.dataset_size,), dtype=np.float)
+		for i in range(FLAGS.dataset_size):
+			cos_val = Cosine(test_good_labels[i], test_bad_logits_2[i])
+			cos_list[i] = cos_val
+		np.save('data/pca/cos_val.npy', cos_list)
+	else:
+		print('Warning!! FUSE INFO PART -- Please choose a evaluation type: top or jsd.')
 
 
 # ============================= MAIN CODE PART ================================
@@ -302,6 +407,11 @@ if __name__ == '__main__':
 			default='SAME',
 			help='type of test(SAME for same perturbation, CROSS for different perturbation).')
 	parser.add_argument(
+			'--eval_type',
+			type=str,
+			default='top',
+			help='type of framework evaluation(top or jsd or cos).')
+	parser.add_argument(
 			'--batch_size',
 			type=int,
 			default=100,
@@ -316,6 +426,11 @@ if __name__ == '__main__':
 			type=int,
 			default=1,
 			help='')
+	parser.add_argument(
+			'--T',
+			type=float,
+			default=1.0,
+			help='softmax layer scale item, in case of saturating.')
 
 	FLAGS, unparsed = parser.parse_known_args()
 
